@@ -1,7 +1,7 @@
 import { createBackend } from './api.js';
 import {
   BRANDS, COLOR_PRESETS, MATERIALS, PURCHASE_WEIGHTS, amsSlots, colorHexFor, colorNameFor, filamentTypeOf, grossOf,
-  netFromGross, normHex, parseCsv, placeList, placeName, remainingShare, spoolLabel, spoolPlace, spoolTypeOf,
+  lowStockLimit, netFromGross, normHex, parseCsv, placeList, placeName, remainingShare, spoolLabel, spoolPlace, spoolTypeOf,
   spoolsFromRows, stockLevel, summarize, toCsv,
 } from './domain.js';
 import {
@@ -218,7 +218,7 @@ function statsHtml() {
   return `
     <div class="stat"><span class="label">Filament auf Lager</span><span class="value">${fmtKg(sum.totalNet)}<small>kg</small></span><span class="hint">${sum.count} Spulen</span></div>
     <div class="stat"><span class="label">Im AMS</span><span class="value">${sum.inAms}</span><span class="hint">${amsSlots.length ? esc(amsSlots.join(' · ')) : 'Spulen eingelegt'}</span></div>
-    <div class="stat ${short ? 'warn' : ''}"><span class="label">Knapp, unter ${fmt(app.settings.lowStock)} g</span><span class="value">${short}</span><span class="hint">${sum.empty ? `davon ${sum.empty} leer` : 'bald nachkaufen'}</span></div>
+    <div class="stat ${short ? 'warn' : ''}"><span class="label">Knapp, unter 1/${app.settings.lowStockPart} der Spule</span><span class="value">${short}</span><span class="hint">${sum.empty ? `davon ${sum.empty} leer` : 'bald nachkaufen'}</span></div>
     <div class="stat"><span class="label">Ungeöffnet</span><span class="value">${sum.sealed}</span><span class="hint">volle Reserve</span></div>
     <div class="stat materials"><span class="label">Nach Material</span>
       ${sum.byMaterial.slice(0, 5).map((m) => `<div class="mat-row"><span class="name" title="${esc(m.material)}">${esc(m.material)}</span><span class="bar"><span style="width:${((m.net / max) * 100).toFixed(1)}%"></span></span><span class="num small">${fmtKg(m.net)} kg</span></div>`).join('')
@@ -250,7 +250,7 @@ function statusPills(s) {
   const level = stockLevel(s, app.settings);
   return [
     level === 'neu' ? '<span class="pill new">Ungeöffnet</span>' : '',
-    level === 'knapp' ? '<span class="pill knapp">Knapp</span>' : '',
+    level === 'knapp' ? `<span class="pill knapp" title="Weniger als 1/${app.settings.lowStockPart} der Spule (${fmt(lowStockLimit(s, app.settings))} g)">Knapp</span>` : '',
     level === 'leer' ? '<span class="pill leer">Leer</span>' : '',
     s.bambu.cloudId ? '<span class="pill cloud" title="Mit dem Bambu Filament Manager verknüpft">Bambu</span>' : '',
   ].join('');
@@ -959,7 +959,7 @@ function renderSettings() {
         <div class="type-row small muted"><span>Name</span><span>Tara in g</span><span></span></div>
         <div class="types" data-types>${app.settings.spoolTypes.map(typeRow).join('')}</div>
         <div class="actions"><button type="button" class="btn small" data-action="type-add">${icons.plus}Spulenart</button></div>
-        <label class="field"><span>Als knapp markieren unter (g)</span><input name="lowStock" type="number" inputmode="numeric" min="0" step="1" value="${app.settings.lowStock}"></label>
+        <label class="field"><span>Als knapp markieren, wenn weniger übrig ist als</span><select name="lowStockPart">${[3, 4, 5, 6, 8, 10].map((n) => `<option value="${n}" ${n === app.settings.lowStockPart ? 'selected' : ''}>1/${n} des Kaufgewichts (bei 1.000 g: ${fmt(1000 / n)} g, bei 250 g: ${fmt(250 / n)} g)</option>`).join('')}</select></label>
         <label class="field"><span>Anzahl AMS-Einheiten (je 4 Slots)</span><select name="amsUnits">${[1, 2, 3, 4].map((n) => `<option value="${n}" ${n === app.settings.amsUnits ? 'selected' : ''}>${n} (${n === 1 ? 'A1–A4' : 'A1–' + String.fromCharCode(64 + n) + '4'})</option>`).join('')}</select></label>
         <div class="actions"><button class="btn primary" type="submit">Speichern</button></div>
       </form>
@@ -1171,7 +1171,7 @@ const forms = {
       tare: r.querySelector('[name="typeTare"]').value,
     }));
     app.settings = await app.backend.saveSettings({
-      ...app.settings, spoolTypes, lowStock: f.lowStock.value, amsUnits: f.amsUnits.value,
+      ...app.settings, spoolTypes, lowStockPart: f.lowStockPart.value, amsUnits: f.amsUnits.value,
     });
     renderSettings();
     toast('Einstellungen gespeichert');

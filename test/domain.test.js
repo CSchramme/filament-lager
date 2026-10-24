@@ -44,10 +44,15 @@ test('normalizeSpool füllt Standardwerte und behält Bambu-Verknüpfung beim Be
   assert.equal(edited.id, s.id);
 });
 
-test('Füllstand-Stufen', () => {
+test('Füllstand-Stufen: knapp unter 1/6 des Kaufgewichts', () => {
   const base = { purchaseWeight: 1000, opened: true };
   assert.equal(stockLevel({ ...base, netWeight: 0 }, settings), 'leer');
-  assert.equal(stockLevel({ ...base, netWeight: 120 }, settings), 'knapp');
+  assert.equal(stockLevel({ ...base, netWeight: 166 }, settings), 'knapp');
+  assert.equal(stockLevel({ ...base, netWeight: 167 }, settings), 'ok');
+  assert.equal(stockLevel({ ...base, purchaseWeight: 250, netWeight: 41 }, settings), 'knapp');
+  assert.equal(stockLevel({ ...base, purchaseWeight: 250, netWeight: 80 }, settings), 'ok');
+  // Aus der Excel-Tabelle sind nur Cyan (35 g) und Blau (25 g) von 250 g knapp
+  assert.deepEqual(seedSpools().filter((s) => stockLevel(s, settings) === 'knapp').map((s) => s.colorName), ['Cyan', 'Blau']);
   assert.equal(stockLevel({ ...base, netWeight: 600 }, settings), 'ok');
   assert.equal(stockLevel({ ...base, opened: false, netWeight: 1000 }, settings), 'neu');
 });
@@ -95,9 +100,10 @@ test('CSV ohne passende Kopfzeile wird abgelehnt', () => {
 });
 
 test('Einstellungen werden bereinigt', () => {
-  const s = normalizeSettings({ spoolTypes: [{ id: 'x', name: 'Test', tare: '-5' }, { name: '' }], lowStock: '200' });
+  const s = normalizeSettings({ spoolTypes: [{ id: 'x', name: 'Test', tare: '-5' }, { name: '' }], lowStockPart: '8' });
   assert.deepEqual(s.spoolTypes, [{ id: 'x', name: 'Test', tare: 0 }]);
-  assert.equal(s.lowStock, 200);
+  assert.equal(s.lowStockPart, 8);
+  assert.equal(normalizeSettings({ lowStockPart: 1 }).lowStockPart, 2);
   assert.equal(normalizeSettings({ spoolTypes: [] }).spoolTypes.length, 2);
 });
 

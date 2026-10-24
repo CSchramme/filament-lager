@@ -64,7 +64,7 @@ export function defaultSettings() {
       { id: 'plastik', name: 'Bambu Plastik', tare: 274 },
       { id: 'pappe', name: 'Pappe', tare: 0 },
     ],
-    lowStock: 150,
+    lowStockPart: 6, // knapp, wenn weniger als 1/6 des Kaufgewichts übrig ist
     amsUnits: 1,
     places: [],
   };
@@ -167,7 +167,7 @@ export function normalizeSettings(input) {
   const places = [...new Set((Array.isArray(src.places) ? src.places : []).map(str).filter(Boolean))];
   return {
     spoolTypes: spoolTypes.length ? spoolTypes : base.spoolTypes,
-    lowStock: Math.max(0, toInt(src.lowStock, base.lowStock)),
+    lowStockPart: Math.min(20, Math.max(2, toInt(src.lowStockPart, base.lowStockPart))),
     amsUnits: Math.min(4, Math.max(1, toInt(src.amsUnits, base.amsUnits))),
     places,
   };
@@ -205,10 +205,15 @@ export function remainingShare(spool) {
   return Math.max(0, Math.min(1, spool.netWeight / spool.purchaseWeight));
 }
 
+// Unter dieser Grammzahl gilt die Spule als knapp (Anteil am Kaufgewicht).
+export function lowStockLimit(spool, settings) {
+  return spool.purchaseWeight / settings.lowStockPart;
+}
+
 // "leer", "knapp", "neu" oder "ok"
 export function stockLevel(spool, settings) {
   if (spool.netWeight <= 0) return 'leer';
-  if (spool.netWeight < settings.lowStock) return 'knapp';
+  if (spool.netWeight < lowStockLimit(spool, settings)) return 'knapp';
   if (!spool.opened && spool.netWeight >= spool.purchaseWeight) return 'neu';
   return 'ok';
 }

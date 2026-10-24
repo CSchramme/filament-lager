@@ -11,7 +11,7 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
 - **Wiegen**: Gewicht mit Spule von der Waage eintippen, die Tara der Spulenart wird
   abgezogen (Bambu-Plastikspule 274 g, Pappe 0 g, beides änderbar). Die App zeigt auch an,
   wie viel seit dem letzten Wiegen verbraucht wurde.
-- **Übersicht**: Filament gesamt, Spulen im AMS, knappe Spulen (Grenze einstellbar), ungeöffnete
+- **Übersicht**: Filament gesamt, Spulen im AMS, knappe Spulen (weniger als 1/6 des Kaufgewichts übrig, einstellbar), ungeöffnete
   Reserve, Menge je Material.
 - **Plätze**: zeigt jedes Paket und jeden AMS-Slot mit den Spulen darin. Spulen antippen und beim
   Ziel auf „Hierher“ tippen, am Rechner auch per Ziehen und Ablegen. Mehrere Spulen gehen auf einmal.
@@ -32,20 +32,32 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
 
 Der Startbestand sind die 18 Spulen aus der Excel-Tabelle.
 
-## Starten auf dem Mac (oder Windows/Linux)
+## Starten auf dem Mac
 
-1. [Node.js](https://nodejs.org) in Version 20 oder neuer installieren (LTS-Version).
-2. Dieses Repository herunterladen (grüner Button „Code“ → „Download ZIP“) und entpacken.
-3. Im Terminal in den Ordner wechseln und einmalig die Abhängigkeiten installieren:
-   ```sh
-   npm install
-   ```
-4. Starten:
-   ```sh
-   npm start
-   ```
-5. Im Browser `http://localhost:3000` öffnen. Am Handy im selben WLAN die Adresse verwenden,
-   die beim Start angezeigt wird (z. B. `http://192.168.178.23:3000`).
+1. [Node.js](https://nodejs.org) in Version 20 oder neuer installieren (LTS-Version, einmalig).
+2. Dieses Repository herunterladen (grüner Button „Code“ → „Download ZIP“) und entpacken,
+   z. B. in den Ordner „Dokumente“.
+3. Im entpackten Ordner **`Filament-Lager starten.command`** doppelklicken.
+   - Beim allerersten Mal meldet macOS, dass die Datei aus dem Internet stammt. Dann einmal
+     mit Rechtsklick (oder ctrl+Klick) auf die Datei → „Öffnen“ → „Öffnen“ bestätigen. Bei
+     neueren macOS-Versionen stattdessen unter Systemeinstellungen → Datenschutz & Sicherheit
+     „Dennoch öffnen“ wählen.
+   - Meldet macOS „keine Zugriffsrechte“, einmal im Terminal ausführen:
+     `chmod +x ~/Documents/filament-lager-main/"Filament-Lager starten.command"`
+     (Pfad an den Ordner anpassen).
+4. Ein Terminal-Fenster öffnet sich. Beim ersten Start werden die Bausteine installiert, danach
+   öffnet sich das Lager im Browser. Das Fenster offen lassen, solange das Lager laufen soll.
+   Schließen beendet es.
+5. Am Handy im selben WLAN die Adresse verwenden, die im Terminal unter „Im Heimnetz“ steht
+   (z. B. `http://192.168.178.23:3000`). Das geht nur, solange der Mac wach ist.
+
+Läuft das Lager schon, öffnet ein weiterer Doppelklick nur den Browser.
+
+Damit das Lager nach jedem Anmelden automatisch startet: Systemeinstellungen → Allgemein →
+Anmeldeobjekte → „+“ → `Filament-Lager starten.command` auswählen.
+
+Unter Windows heißt die Startdatei `Filament-Lager starten.bat`. Ohne Startdatei geht es im
+Terminal mit `npm install` und danach `npm start`.
 
 Die Daten liegen in `data/lager.json`. Diese Datei sichern, dann ist alles gesichert.
 

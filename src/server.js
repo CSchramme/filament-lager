@@ -23,7 +23,15 @@ setInterval(() => {
   app.locals.autoPull().catch((err) => console.error('Automatischer Bambu-Abgleich fehlgeschlagen:', err.message));
 }, AUTO_PULL_MS).unref();
 
-const server = app.listen(PORT, '0.0.0.0', () => {
+// Express ruft den Callback auch bei einem Fehler auf (z. B. Port belegt).
+const server = app.listen(PORT, '0.0.0.0', (err) => {
+  if (err) {
+    console.error(err.code === 'EADDRINUSE'
+      ? `Port ${PORT} ist schon belegt. Läuft das Filament-Lager bereits in einem anderen Fenster?`
+      : `Server konnte nicht starten: ${err.message}`);
+    printers.stopAll();
+    process.exit(1);
+  }
   const lan = Object.values(os.networkInterfaces()).flat()
     .filter((i) => i && i.family === 'IPv4' && !i.internal)
     .map((i) => `http://${i.address}:${PORT}`);
