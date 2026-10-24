@@ -132,3 +132,51 @@ test('PrinterManager verbindet per MQTT und fordert den vollen Status an', () =>
     pm.sync([{ id: 'p1', name: 'P1S', host: '192.168.1.20', serial: 'SN1', accessCode: 'abcd1234' }]);
   });
 });
+
+test('Gelernte RFID: Spule von Hand in einen Slot gelegt, Bambu-Spule steckt dort', () => {
+  const state = mergeReport(emptyPrinterState(), report());
+  const printers = [{ printerId: 'cloud:SN1', slots: stateView(state).units[0].slots }];
+  // Orange liegt laut "Plätze" in A1, dort steckt eine orange Bambu-Spule mit RFID
+  const orange = normalizeSpool({ colorName: 'Orange', colorHex: '#FF6A13', inAms: true, bambu: { slot: 'A1' } });
+  // Blau in A2: dort steckt eine schwarze Spule ohne RFID, Farbe wird gemerkt
+  const blau = normalizeSpool({ colorName: 'Blau', inAms: true, bambu: { slot: 'A2' } });
+  const [c1, c2] = reconcileAms([orange, blau], printers);
+  assert.deepEqual(c1.patch.bambu, { printerId: 'cloud:SN1', slotColor: '#FF6A13', rfid: RFID });
+  assert.deepEqual(c2.patch.bambu, { printerId: 'cloud:SN1', slotColor: '#000000' });
+  // Grün in A1 passt farblich nicht zur orangen Spule: Zuordnung wird gelöst
+  const gruen = normalizeSpool({ colorName: 'Bambus Grün', inAms: true, bambu: { slot: 'A1' } });
+  const [c3] = reconcileAms([gruen], printers);
+  assert.equal(c3.patch.inAms, false);
+});
+
+test('Cloud-Verbindung nutzt Bambu-Konto statt IP und Zugangscode', () => {
+  let opts = null;
+  const fakeConnect = (url, o) => {
+    opts = { url, ...o };
+    const client = new EventEmitter();
+    client.subscribe = () => {};
+    client.publish = () => {};
+    client.end = () => {};
+    return client;
+  };
+  const pm = new PrinterManager({ connect: fakeConnect });
+  pm.sync([{ id: 'cloud:SN1', name: 'P1S', kind: 'cloud', host: 'us.mqtt.bambulab.com', serial: 'SN1', username: 'u_42', accessCode: 'TOKEN' }]);
+  assert.equal(opts.url, 'mqtts://us.mqtt.bambulab.com:8883');
+  assert.equal(opts.username, 'u_42');
+  assert.equal(opts.password, 'TOKEN');
+  assert.equal(opts.rejectUnauthorized, true);
+  const [v] = pm.view([{ id: 'cloud:SN1', name: 'P1S', kind: 'cloud', serial: 'SN1' }]);
+  assert.equal(v.kind, 'cloud');
+  assert.equal(JSON.stringify(v).includes('TOKEN'), false);
+  pm.stopAll();
+});
+
+test('Spulen "im AMS, Slot unbekannt" werden den Bambu-Spulen im AMS zugeordnet', () => {
+  const state = mergeReport(emptyPrinterState(), report());
+  const printers = [{ printerId: 'p1', slots: stateView(state).units[0].slots }];
+  const orange = normalizeSpool({ colorName: 'Orange', inAms: true }); // A1 ist orange mit RFID
+  const gelb = normalizeSpool({ colorName: 'Gelb', inAms: true }); // keine passende Spule
+  const imPaket = normalizeSpool({ colorName: 'Orange', location: '3' }); // nicht im AMS: bleibt
+  const changes = reconcileAms([gelb, imPaket, orange], printers);
+  assert.deepEqual(changes, [{ id: orange.id, patch: { bambu: { printerId: 'p1', slot: 'A1', slotColor: '#FF6A13', rfid: RFID } } }]);
+});

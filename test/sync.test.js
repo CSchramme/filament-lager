@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { defaultSettings, normalizeSpool } from '../public/js/domain.js';
 import {
-  applyPull, applyPush, cloudBodyFromLocal, pairSpools, pullPreview, pushPreview,
+  applyPull, applyPush, cloudBodyFromLocal, mergedNet, pairSpools, pullPreview, pushPreview,
 } from '../src/bambu/sync.js';
 
 const RFID = 'A1B2C3D4E5F60718293A4B5C6D7E8F90';
@@ -120,4 +120,28 @@ test('Neue Cloud-Spule hat die Felder, die Bambu Studio erwartet', () => {
   assert.equal(body.totalNetWeight, 1000);
   assert.equal(body.netWeight, 400);
   assert.equal(body.createType, 'manual');
+});
+
+test('Restgewicht beim Holen: gewogene Werte gehen nicht verloren', () => {
+  const at = (net, syncedNet) => local({ netWeight: net, bambu: { cloudId: 1, syncedNet } });
+  assert.equal(mergedNet(at(958, 958), 908, true), 908); // nur Bambu hat sich geändert (Druck)
+  assert.equal(mergedNet(at(600, 958), 958, true), 600); // nur gewogen
+  assert.equal(mergedNet(at(600, 958), 908, true), 600); // beides: kleinerer Wert
+  assert.equal(mergedNet(at(930, null), 1000, false), 930); // erste Zuordnung: kleinerer Wert
+});
+
+test('Gleiche Spule wird auch bei leicht anderem Farbcode erkannt', () => {
+  const a = local({ colorName: 'Orange', colorHex: '#FF6A13', netWeight: 237 });
+  const cloud = [{ id: 7, filamentVendor: 'Bambu Lab', filamentName: 'PLA Basic', color: '#FF6B15FF', netWeight: 240, totalNetWeight: 1000 },
+    { id: 8, filamentVendor: 'Bambu Lab', filamentName: 'PLA Basic', color: '#0000FFFF', netWeight: 240, totalNetWeight: 1000 }];
+  const { pairs, cloudOnly } = pairSpools([a], cloud);
+  assert.deepEqual(pairs.map((p) => [p.cloud.id, p.how]), [[7, 'soft']]);
+  assert.deepEqual(cloudOnly.map((c) => c.id), [8]);
+});
+
+test('Automatischer Abgleich übernimmt "im AMS" nicht aus dem Filament Manager', () => {
+  const store = memoryStore([local({ colorName: 'Orange', netWeight: 800, bambu: { rfid: RFID, cloudId: 1, syncedNet: 800 } })]);
+  applyPull(store, cloudSpools(), 'alle', { withAms: false });
+  assert.equal(store.spools[0].inAms, false);
+  assert.equal(store.spools.length, 3); // die beiden anderen Cloud-Spulen kommen neu dazu
 });

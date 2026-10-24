@@ -19,6 +19,14 @@ class FakeCloud {
     this.token = token;
   }
 
+  async listDevices() {
+    return [];
+  }
+
+  async mqttUsername() {
+    return 'u_1';
+  }
+
   async login(account, password) {
     if (password !== 'richtig') throw new CloudError('E-Mail oder Passwort ist falsch.', 400, 'credentials');
     return { status: 'code' };
@@ -86,6 +94,7 @@ before(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lager-'));
   const store = new Store(path.join(dir, 'lager.json'));
   await store.load();
+  store.bambu.options.autoSync = false; // die Abgleich-Tests rufen alles selbst auf
   const app = createApp({ store, printers, publicDir: path.join(root, 'public'), cloudFactory: (o) => new FakeCloud(o) });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
@@ -235,4 +244,39 @@ test('Spulen verschieben und Pakete verwalten', async () => {
   assert.equal((await call('POST', '/api/places', { action: 'remove', name: 'Regal' })).status, 400);
   const saved = JSON.parse(await fs.readFile(path.join(dir, 'lager.json'), 'utf8'));
   assert.ok(saved.settings.places.includes('Regal'));
+});
+
+test('Automatischer Abgleich und Drucker aus dem Bambu-Konto', async () => {
+  const store = new Store(path.join(dir, 'auto.json'));
+  await store.load();
+  store.bambu.cloud.token = 'TOKEN-1';
+  class DeviceCloud extends FakeCloud {
+    async listDevices() {
+      return [{ dev_id: 'SN9', name: 'P1S Werkstatt', dev_product_name: 'P1S' }];
+    }
+  }
+  const pm = new FakePrinters();
+  const app = createApp({ store, printers: pm, publicDir: path.join(root, 'public'), cloudFactory: (o) => new DeviceCloud(o) });
+  await app.locals.startBambu();
+  await app.locals.autoSync();
+  // Drucker wird über die Cloud verbunden, ohne IP-Adresse
+  assert.deepEqual(pm.configs.map((c) => [c.id, c.kind, c.host, c.username, c.accessCode]),
+    [['cloud:SN9', 'cloud', 'us.mqtt.bambulab.com', 'u_1', 'TOKEN-1']]);
+  // Spulen aus dem Filament Manager wurden zugeordnet statt doppelt angelegt
+  assert.equal(store.spools.length, 18);
+  const weiss = store.spools.find((s) => s.bambu.cloudId === 501);
+  assert.equal(weiss.colorName, 'Weiß');
+  assert.equal(weiss.netWeight, 700);
+  assert.ok(store.bambu.cloud.lastPullAt);
+  // Ausschalten verhindert den Abgleich
+  store.bambu.options.autoSync = false;
+  assert.equal(await app.locals.autoSync(), null);
+  // Abmelden trennt die Cloud-Drucker
+  store.bambu.options.autoSync = true;
+  const srv = await new Promise((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  await fetch(`http://127.0.0.1:${srv.address().port}/api/bambu/cloud/logout`, { method: 'POST' });
+  assert.deepEqual(pm.configs, []);
+  srv.close();
 });

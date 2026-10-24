@@ -1,5 +1,7 @@
-// Live-Verbindung zum Drucker im lokalen Netz (MQTT, Port 8883).
-// Liest nur: AMS-Slots, externe Spule und den Druckstatus.
+// Live-Verbindung zum Drucker per MQTT (Port 8883), entweder direkt im
+// Heimnetz (kind "lan", Zugangscode) oder über die Bambu Cloud (kind "cloud",
+// Anmelde-Token des Bambu-Kontos). Liest nur: AMS-Slots, externe Spule und
+// den Druckstatus.
 import { EventEmitter } from 'node:events';
 import mqtt from 'mqtt';
 import { colorNameFor, materialForFilamentId, normHex } from '../../public/js/domain.js';
@@ -111,9 +113,14 @@ export function stateView(state) {
   return { units, external, gcodeState: state.gcodeState, progress: state.progress, job: state.job, hasAms: state.hasAms };
 }
 
-function friendlyError(err) {
+function friendlyError(err, kind) {
   const msg = String((err && err.message) || err);
-  if (/not authorized|bad user ?name or password|code 5|code 4/i.test(msg)) return 'Zugangscode falsch (am Drucker unter Einstellungen > WLAN/LAN ablesen).';
+  const authFailed = /not authorized|bad user ?name or password|code 5|code 4/i.test(msg);
+  if (kind === 'cloud') {
+    if (authFailed) return 'Die Bambu Cloud lehnt die Verbindung ab. Bitte unter „Bambu“ neu anmelden.';
+    return 'Bambu Cloud nicht erreichbar: ' + msg;
+  }
+  if (authFailed) return 'Zugangscode falsch (am Drucker unter Einstellungen > WLAN/LAN ablesen).';
   if (/ECONNREFUSED/.test(msg)) return 'Drucker lehnt die Verbindung ab. Ist der LAN-Modus/Entwicklermodus für MQTT freigegeben?';
   if (/EHOSTUNREACH|ETIMEDOUT|ENETUNREACH|timeout/i.test(msg)) return 'Drucker unter dieser IP-Adresse nicht erreichbar.';
   return msg;
@@ -132,12 +139,13 @@ export class PrinterConnection extends EventEmitter {
   }
 
   start() {
-    const { host, serial, accessCode } = this.config;
+    const { host, serial, accessCode, kind, username } = this.config;
+    const cloud = kind === 'cloud';
     this.status = 'verbinde';
     this.client = this.connectFn(`mqtts://${host}:8883`, {
-      username: 'bblp',
-      password: accessCode,
-      rejectUnauthorized: false, // Der Drucker nutzt ein selbst signiertes Zertifikat.
+      username: cloud ? username : 'bblp',
+      password: accessCode, // in der Cloud ist das der Anmelde-Token
+      rejectUnauthorized: cloud, // Der Drucker selbst nutzt ein selbst signiertes Zertifikat.
       reconnectPeriod: 15000,
       connectTimeout: 10000,
       clientId: 'filament-lager-' + Math.random().toString(16).slice(2, 10),
@@ -163,7 +171,7 @@ export class PrinterConnection extends EventEmitter {
     });
     this.client.on('error', (err) => {
       this.status = 'fehler';
-      this.error = friendlyError(err);
+      this.error = friendlyError(err, kind);
       this.emit('update');
     });
     this.client.on('close', () => {
@@ -202,9 +210,10 @@ export class PrinterManager extends EventEmitter {
 
   sync(configs) {
     const wanted = new Map(configs.filter((c) => c.enabled !== false && c.host && c.serial && c.accessCode).map((c) => [c.id, c]));
+    const same = (a, b) => ['kind', 'host', 'serial', 'username', 'accessCode'].every((k) => a[k] === b[k]);
     for (const [id, conn] of this.conns) {
       const cfg = wanted.get(id);
-      if (!cfg || cfg.host !== conn.config.host || cfg.serial !== conn.config.serial || cfg.accessCode !== conn.config.accessCode) {
+      if (!cfg || !same(cfg, conn.config)) {
         conn.stop();
         this.conns.delete(id);
       }
@@ -239,7 +248,7 @@ export class PrinterManager extends EventEmitter {
   view(configs) {
     return configs.map((c) => {
       const conn = this.conns.get(c.id);
-      const base = { id: c.id, name: c.name, host: c.host, serial: c.serial, enabled: c.enabled !== false };
+      const base = { id: c.id, name: c.name, kind: c.kind || 'lan', host: c.host, serial: c.serial, enabled: c.enabled !== false };
       if (!conn) return { ...base, status: 'aus', error: '', units: [], external: [] };
       return { ...base, ...conn.view() };
     });

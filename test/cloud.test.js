@@ -92,3 +92,10 @@ test('Benutzername aus dem Token', () => {
   assert.equal(accountFromToken(`a.${payload}.c`), 'u_123');
   assert.equal(accountFromToken('kein-jwt'), '');
 });
+
+test('MQTT-Benutzername aus dem Token oder über die Nutzer-ID', async () => {
+  const payload = Buffer.from(JSON.stringify({ username: 'u_777' })).toString('base64url');
+  assert.equal(await new BambuCloud({ token: `a.${payload}.c`, fetchImpl: fakeFetch({}) }).mqttUsername(), 'u_777');
+  const fetch = fakeFetch({ [`GET ${API}/v1/design-user-service/my/preference`]: () => ({ body: { uid: 123456 } }) });
+  assert.equal(await new BambuCloud({ token: 'kein-jwt', fetchImpl: fetch }).mqttUsername(), 'u_123456');
+});

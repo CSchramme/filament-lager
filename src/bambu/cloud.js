@@ -6,6 +6,7 @@
 // "bambu-filament-manager") und können sich ändern.
 
 const API_HOSTS = { global: 'https://api.bambulab.com', china: 'https://api.bambulab.cn' };
+const MQTT_HOSTS = { global: 'us.mqtt.bambulab.com', china: 'cn.mqtt.bambulab.com' };
 const WEB_HOSTS = { global: 'https://bambulab.com', china: 'https://bambulab.cn' };
 const SPOOLS_PATH = '/v1/design-user-service/my/filament/v2';
 const PAGE_SIZE = 100;
@@ -191,16 +192,33 @@ export class BambuCloud {
     const data = await this.request('GET', '/v1/iot-service/api/user/bind');
     return (data.devices || []).filter((d) => d && typeof d === 'object');
   }
+
+  // Benutzername für die Cloud-MQTT-Verbindung zum Drucker: "u_<Nutzer-ID>".
+  async mqttUsername() {
+    const fromToken = String(jwtPayload(this.token).username || '');
+    if (fromToken.startsWith('u_')) return fromToken;
+    const data = await this.request('GET', '/v1/design-user-service/my/preference');
+    if (!data.uid) throw new CloudError('Bambu hat keine Nutzer-ID geliefert.');
+    return 'u_' + data.uid;
+  }
 }
 
-// Liest den Benutzernamen aus dem JWT, falls der Token einer ist.
-export function accountFromToken(token) {
+export function mqttHost(region) {
+  return MQTT_HOSTS[region === 'china' ? 'china' : 'global'];
+}
+
+function jwtPayload(token) {
   const parts = String(token || '').split('.');
-  if (parts.length !== 3) return '';
+  if (parts.length !== 3) return {};
   try {
-    const payload = JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
-    return payload.username || payload.preferred_username || payload.email || '';
+    return JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')) || {};
   } catch {
-    return '';
+    return {};
   }
+}
+
+// Anzeigename aus dem Token, falls er einer ist (für von Hand eingetragene Tokens).
+export function accountFromToken(token) {
+  const p = jwtPayload(token);
+  return p.email || p.preferred_username || p.username || '';
 }

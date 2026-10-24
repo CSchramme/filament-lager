@@ -13,7 +13,7 @@ const PASSWORD = process.env.LAGER_PASSWORT || '';
 // Unter Plesk (Phusion Passenger) ist das Lager aus dem Internet erreichbar
 // und braucht deshalb ein Passwort.
 const ON_WEBSERVER = Boolean(globalThis.PhusionPassenger || process.env.PASSENGER_APP_ENV);
-const AUTO_PULL_MS = 15 * 60 * 1000;
+const AUTO_SYNC_MS = 10 * 60 * 1000;
 
 const store = new Store(DATA_FILE);
 await store.load();
@@ -23,11 +23,11 @@ const app = createApp({
   store, printers, publicDir: path.join(root, 'public'), password: PASSWORD, requirePassword: ON_WEBSERVER,
 });
 if (ON_WEBSERVER && !PASSWORD) console.error('LAGER_PASSWORT fehlt: Das Lager bleibt gesperrt, bis ein Passwort gesetzt ist.');
-printers.sync(store.bambu.printers);
+app.locals.startBambu();
 
 setInterval(() => {
-  app.locals.autoPull().catch((err) => console.error('Automatischer Bambu-Abgleich fehlgeschlagen:', err.message));
-}, AUTO_PULL_MS).unref();
+  app.locals.autoSync().catch((err) => console.error('Automatischer Bambu-Abgleich fehlgeschlagen:', err.message));
+}, AUTO_SYNC_MS).unref();
 
 // Express ruft den Callback auch bei einem Fehler auf (z. B. Port belegt).
 const server = app.listen(PORT, '0.0.0.0', (err) => {

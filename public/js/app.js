@@ -1,6 +1,6 @@
 import { createBackend } from './api.js';
 import {
-  BRANDS, COLOR_PRESETS, MATERIALS, PURCHASE_WEIGHTS, amsSlots, colorHexFor, colorNameFor, filamentTypeOf, grossOf,
+  BRANDS, COLOR_PRESETS, MATERIALS, PURCHASE_WEIGHTS, amsSlots, colorDistance, colorHexFor, colorNameFor, filamentTypeOf, grossOf,
   lowStockLimit, netFromGross, normHex, parseCsv, placeList, placeName, remainingShare, spoolLabel, spoolPlace, spoolTypeOf,
   spoolsFromRows, stockLevel, summarize, toCsv,
 } from './domain.js';
@@ -778,12 +778,12 @@ function updateCloud() {
       <div class="status-line"><span><span class="dot ok"></span>Verbunden${c.account ? ' als ' + esc(c.account) : ''}</span><span>Region ${c.region === 'china' ? 'China' : 'Global'}</span></div>
       <div class="status-line"><span>Zuletzt geholt: ${esc(timeAgo(c.lastPullAt))}</span><span>Zuletzt gesendet: ${esc(timeAgo(c.lastPushAt))}</span></div>
       ${c.lastError ? `<div class="note crit">${esc(c.lastError)}</div>` : ''}
+      <label class="switch"><input type="checkbox" data-option="autoSync" ${app.bambu.options.autoSync ? 'checked' : ''}><span>Automatisch von Bambu holen<small>Alle 10 Minuten und beim Öffnen der Seite: neue Spulen aus dem Filament Manager, Zuordnungen und Restgewichte nach dem Drucken. Gewogene Werte bleiben erhalten, gelöscht wird nichts.</small></span></label>
+      <label class="switch"><input type="checkbox" data-option="cloudAms" ${app.bambu.options.cloudAms ? 'checked' : ''}><span>AMS live über das Bambu-Konto<small>Zeigt die AMS-Slots deiner Drucker ohne IP-Adresse an, auch wenn das Lager auf einem Webserver läuft.${c.devices ? ` ${c.devices} Drucker im Konto gefunden.` : ''}</small></span></label>
       <div class="actions">
-        <button class="btn primary" type="button" data-action="pull">${icons.down}Von Bambu holen</button>
+        <button class="btn" type="button" data-action="pull">${icons.down}Jetzt holen (mit Vorschau)</button>
         <button class="btn" type="button" data-action="push">${icons.up}Nach Bambu senden</button>
       </div>
-      <p class="small muted">Vor jeder Übernahme siehst du eine Liste der Änderungen und wählst aus, was übernommen wird. Gelöscht wird nichts.</p>
-      <label class="switch"><input type="checkbox" data-option="autoPull" ${app.bambu.options.autoPull ? 'checked' : ''}><span>Restgewichte alle 15 Minuten von Bambu übernehmen<small>Nur für bereits verknüpfte Spulen. Bambu Studio zieht nach jedem Druck den Verbrauch ab.</small></span></label>
       <div class="actions"><button class="btn small ghost" type="button" data-action="logout">Abmelden</button></div>`;
     return;
   }
@@ -833,12 +833,6 @@ function linkedSpool(printer, tray) {
   return app.spools.find((s) => (tray.rfid && s.bambu.rfid === tray.rfid) || (s.bambu.printerId === printer.id && s.bambu.slot === tray.slot));
 }
 
-function colorDistance(a, b) {
-  const x = parseInt(normHex(a).slice(1) || '0', 16);
-  const y = parseInt(normHex(b).slice(1) || '0', 16);
-  return Math.hypot(((x >> 16) & 255) - ((y >> 16) & 255), ((x >> 8) & 255) - ((y >> 8) & 255), (x & 255) - (y & 255));
-}
-
 function slotHtml(printer, t) {
   if (t.empty) return `<div class="slot empty"><span class="slot-id">${esc(t.slot)}</span><span class="small">leer</span></div>`;
   const linked = linkedSpool(printer, t);
@@ -869,7 +863,7 @@ function printerHtml(p) {
   const job = p.gcodeState === 'RUNNING' || p.gcodeState === 'PAUSE'
     ? `${g}: ${esc(p.job || 'Druckauftrag')}${p.progress !== null ? ` (${p.progress} %)` : ''}` : esc(g);
   return `<div class="printer">
-    <div class="status-line"><strong>${esc(p.name)}</strong><span><span class="dot ${dot}"></span>${label}</span>${job ? `<span>${job}</span>` : ''}</div>
+    <div class="status-line"><strong>${esc(p.name)}</strong><span><span class="dot ${dot}"></span>${label}</span><span class="muted">${p.kind === 'cloud' ? 'über Bambu-Konto' : 'im Heimnetz'}</span>${job ? `<span>${job}</span>` : ''}</div>
     ${p.error ? `<div class="note crit">${esc(p.error)}</div>` : ''}
     ${p.units.map((u) => `<div class="ams-unit"><div class="unit-head"><strong>${esc(u.label)}</strong>${u.humidity !== null ? `<span>Luftfeuchte ${u.humidity} %</span>` : ''}${u.temp !== null ? `<span>${u.temp} °C</span>` : ''}</div>
       <div class="slots">${u.slots.map((t) => slotHtml(p, t)).join('')}</div></div>`).join('')}
@@ -890,7 +884,7 @@ function updatePrinters(force = false) {
   const o = app.bambu.options;
   const ps = app.bambu.printers;
   el.innerHTML = `<div class="panel-head"><h2>AMS live</h2><p>${ps.length ? 'Aktualisiert sich automatisch' : ''}</p></div>
-    ${ps.length ? ps.map(printerHtml).join('') : '<p class="muted">Noch kein Drucker eingerichtet. Trage unten IP-Adresse, Seriennummer und Zugangscode ein, dann erscheinen hier die AMS-Slots mit Farbe und Füllstand.</p>'}
+    ${ps.length ? ps.map(printerHtml).join('') : `<p class="muted">${app.bambu.cloud.connected ? 'Im Bambu-Konto wurde noch kein Drucker gefunden oder „AMS live über das Bambu-Konto“ ist aus.' : 'Melde dich unten bei Bambu an, dann erscheinen deine Drucker hier automatisch mit Farbe und Füllstand jedes AMS-Slots.'}</p>`}
     <div class="grid-2">
       <label class="switch"><input type="checkbox" data-option="autoAms" ${o.autoAms ? 'checked' : ''}><span>„Im AMS“ automatisch setzen<small>Erkennt Bambu-Spulen per RFID und Spulen, die du einem Slot zugeordnet hast. Wird der Slot leer, gilt die Spule wieder als im Lager.</small></span></label>
       <label class="switch"><input type="checkbox" data-option="amsWeights" ${o.amsWeights ? 'checked' : ''}><span>Restgewicht aus dem AMS übernehmen<small>Nur Bambu-Spulen mit RFID. Das AMS meldet grobe Prozentwerte und überschreibt gewogene Werte.</small></span></label>
@@ -900,10 +894,12 @@ function updatePrinters(force = false) {
 function updateSetup() {
   const el = document.getElementById('setup');
   if (!el) return;
-  const ps = app.bambu.printers;
-  el.innerHTML = `<div class="panel-head"><h2>Drucker im Heimnetz</h2><p>Für die AMS-Live-Anzeige</p></div>
+  const ps = app.bambu.printers.filter((p) => p.kind !== 'cloud');
+  el.innerHTML = `<div class="panel-head"><h2>Drucker im Heimnetz</h2><p>Optional</p></div>
+    <p class="small muted">Nur nötig, wenn das Lager im selben Netz wie der Drucker läuft (Mac, Raspberry Pi) und ohne Bambu-Konto verbunden werden soll. Mit Bambu-Anmeldung erscheinen die Drucker automatisch.</p>
     ${ps.map((p) => `<div class="status-line"><strong>${esc(p.name)}</strong><span class="num">${esc(p.host)}</span><span class="num">${esc(p.serial)}</span>
       <button class="btn small ghost danger" type="button" data-action="printer-delete" data-id="${esc(p.id)}">Entfernen</button></div>`).join('')}
+    <details><summary>Drucker im Heimnetz eintragen</summary>
     <form class="fields" data-form="printer">
       <label class="field"><span>Name</span><input name="name" placeholder="z. B. P1S Werkstatt"></label>
       <label class="field"><span>IP-Adresse</span><input name="host" inputmode="decimal" placeholder="192.168.178.50" required></label>
@@ -918,6 +914,7 @@ function updateSetup() {
         <li>Der Drucker muss im selben Netz sein wie der Rechner, auf dem das Filament-Lager läuft.</li>
         <li>Je nach Firmware muss am Drucker der LAN-Modus bzw. Entwicklermodus aktiv sein, damit andere Programme den Status lesen dürfen.</li>
       </ol>
+    </details>
     </details>`;
 }
 

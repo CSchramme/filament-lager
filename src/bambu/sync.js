@@ -3,11 +3,18 @@
 // Zuordnung einer Lagerspule zu einer Cloud-Spule, in dieser Reihenfolge:
 //   1. gespeicherte Cloud-ID
 //   2. RFID-Kennung (tray_uuid der Bambu-Spule)
-//   3. gleicher Hersteller, Material, Farbe und Kaufgewicht (für Spulen aus
-//      der Excel-Liste, die schon im Filament Manager stehen)
+//   3. gleicher Hersteller, Material und Kaufgewicht und ähnliche Farbe (für
+//      Spulen aus der Excel-Liste, die schon im Filament Manager stehen)
+//
+// Restgewicht beim Holen: Hat sich seit dem letzten Abgleich nur Bambu
+// geändert, gilt Bambus Wert; hat sich nur das Lager geändert (gewogen),
+// bleibt der Lagerwert. Haben sich beide geändert, gilt der kleinere Wert,
+// denn Filament wird nur weniger.
 import {
-  bambuFilamentId, colorNameFor, filamentTypeOf, normHex, normalizeSpool,
+  bambuFilamentId, colorDistance, colorNameFor, filamentTypeOf, normHex, normalizeSpool,
 } from '../../public/js/domain.js';
+
+const MAX_COLOR_DISTANCE = 40;
 
 const FIELD_LABELS = {
   netWeight: 'Restgewicht',
@@ -78,8 +85,8 @@ export function cloudBodyFromLocal(s) {
   };
 }
 
-function softKey(brand, material, hex, weight) {
-  return [str(brand).toLowerCase(), str(material).toLowerCase(), normHex(hex), int(weight, 0)].join('|');
+function softKey(brand, material, weight) {
+  return [str(brand).toLowerCase(), str(material).toLowerCase(), int(weight, 0)].join('|');
 }
 
 export function pairSpools(localSpools, cloudSpools) {
@@ -106,12 +113,15 @@ export function pairSpools(localSpools, cloudSpools) {
 
   const localOnly = [];
   for (const s of unpaired) {
-    const key = softKey(s.brand, s.material, s.colorHex, s.purchaseWeight);
+    const key = softKey(s.brand, s.material, s.purchaseWeight);
+    // Ähnlichste Farbe zuerst, bei gleicher Farbe das nächstliegende Restgewicht.
+    const score = (c) => colorDistance(cloudColor(c), s.colorHex) * 10000 + Math.abs(int(c.netWeight, 0) - s.netWeight);
     let best = null;
     for (const c of cloudSpools) {
       if (usedCloud.has(String(c.id))) continue;
-      if (softKey(c.filamentVendor, c.filamentName || c.filamentType, cloudColor(c), c.totalNetWeight) !== key) continue;
-      if (!best || Math.abs(int(c.netWeight, 0) - s.netWeight) < Math.abs(int(best.netWeight, 0) - s.netWeight)) best = c;
+      if (softKey(c.filamentVendor, c.filamentName || c.filamentType, c.totalNetWeight) !== key) continue;
+      if (colorDistance(cloudColor(c), s.colorHex) > MAX_COLOR_DISTANCE) continue;
+      if (!best || score(c) < score(best)) best = c;
     }
     if (best) {
       usedCloud.add(String(best.id));
@@ -137,17 +147,27 @@ function describeCloud(c) {
   return { id: c.id, material: f.material, brand: f.brand, colorName: f.colorName, colorHex: f.colorHex, netWeight: f.netWeight };
 }
 
-// Vorschau "Von Bambu übernehmen"
-export function pullPreview(localSpools, cloudSpools) {
+export function mergedNet(local, cloudNet, linked) {
+  const synced = linked ? local.bambu.syncedNet : null;
+  if (synced === null || synced === undefined) return Math.min(local.netWeight, cloudNet);
+  if (local.netWeight === synced) return cloudNet;
+  if (cloudNet === synced) return local.netWeight;
+  return Math.min(local.netWeight, cloudNet);
+}
+
+// Vorschau "Von Bambu übernehmen". withAms: auch "im AMS" aus dem Filament
+// Manager übernehmen (beim automatischen Abgleich nicht, dort gilt das AMS selbst).
+export function pullPreview(localSpools, cloudSpools, { withAms = true } = {}) {
   const { pairs, cloudOnly } = pairSpools(localSpools, cloudSpools);
   const items = [];
   for (const { local, cloud, how } of pairs) {
     const f = fieldsFromCloud(cloud);
-    const changes = [];
-    if (f.netWeight !== local.netWeight) changes.push(change('netWeight', local.netWeight, f.netWeight));
-    if (f.purchaseWeight !== local.purchaseWeight) changes.push(change('purchaseWeight', local.purchaseWeight, f.purchaseWeight));
-    if (f.inAms !== null && f.inAms !== local.inAms) changes.push(change('inAms', local.inAms, f.inAms));
     const linked = local.bambu.cloudId === cloud.id;
+    const changes = [];
+    const net = mergedNet(local, f.netWeight, linked);
+    if (net !== local.netWeight) changes.push(change('netWeight', local.netWeight, net));
+    if (f.purchaseWeight !== local.purchaseWeight) changes.push(change('purchaseWeight', local.purchaseWeight, f.purchaseWeight));
+    if (withAms && f.inAms !== null && f.inAms !== local.inAms) changes.push(change('inAms', local.inAms, f.inAms));
     if (!changes.length && linked) continue;
     items.push({
       key: 'cloud:' + cloud.id,
@@ -223,12 +243,12 @@ function guessSpoolType(purchaseWeight, settings) {
 }
 
 // Wendet die ausgewählten Punkte der Pull-Vorschau auf den Store an.
-export function applyPull(store, cloudSpools, keys, { now = new Date().toISOString(), kinds = null } = {}) {
-  const wanted = new Set(keys);
+export function applyPull(store, cloudSpools, keys, { now = new Date().toISOString(), kinds = null, withAms = true } = {}) {
+  const wanted = keys === 'alle' ? null : new Set(keys);
   const byKey = new Map(cloudSpools.map((c) => ['cloud:' + c.id, c]));
   const result = { created: 0, updated: 0 };
-  for (const item of pullPreview(store.spools, cloudSpools)) {
-    if (!wanted.has(item.key) || (kinds && !kinds.includes(item.kind))) continue;
+  for (const item of pullPreview(store.spools, cloudSpools, { withAms })) {
+    if ((wanted && !wanted.has(item.key)) || (kinds && !kinds.includes(item.kind))) continue;
     const cloud = byKey.get(item.key);
     const f = fieldsFromCloud(cloud);
     const link = { cloudId: cloud.id, rfid: f.rfid, syncedNet: f.netWeight, syncedAt: now };

@@ -7,9 +7,13 @@ import { seedSpools } from '../public/js/seed.js';
 
 function emptyBambu() {
   return {
-    cloud: { region: 'global', token: '', account: '', connectedAt: '', lastPullAt: '', lastPushAt: '', lastError: '' },
+    cloud: {
+      region: 'global', token: '', account: '', connectedAt: '', lastPullAt: '', lastPushAt: '', lastError: '',
+      mqttUser: '', devices: [],
+    },
     printers: [],
-    options: { autoAms: true, amsWeights: false, autoPull: false },
+    // autoSync: Filament Manager automatisch holen, cloudAms: AMS über die Bambu Cloud
+    options: { autoAms: true, amsWeights: false, autoSync: true, cloudAms: true },
   };
 }
 
@@ -40,6 +44,7 @@ export class Store {
           options: { ...bambu.options, ...(src.options || {}) },
         },
       };
+      delete this.data.bambu.options.autoPull; // ersetzt durch autoSync
       this.data.settings.places = placeList(this.data.settings, this.data.spools);
     } else {
       this.data = { version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu() };

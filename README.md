@@ -22,13 +22,15 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
 - Suchen, filtern (im AMS, geöffnet, ungeöffnet, knapp) und sortieren.
 - Spulen anlegen (auch mehrere gleiche auf einmal), bearbeiten, duplizieren, löschen.
 - **Import/Export**: CSV im Excel-Format (Semikolon, deutsche Spaltennamen) und JSON-Sicherung.
-- **Bambu Filament Manager (Cloud)**: Spulen von Bambu holen und Spulen nach Bambu senden,
-  jeweils mit Vorschau. Spulen werden über RFID, Cloud-ID oder gleiche Merkmale (Hersteller,
-  Material, Farbe, Kaufgewicht) einander zugeordnet. Optional werden die Restgewichte alle
-  15 Minuten von Bambu übernommen.
-- **AMS live** über das Heimnetz: Farbe, Material und Füllstand jedes Slots, Luftfeuchte,
-  laufender Druck. „Im AMS“ und der Slot werden automatisch gesetzt (RFID-Spulen oder von Hand zugeordnete
-  Slots), Slots lassen sich Lagerspulen zuordnen oder als neue Spule anlegen.
+- **Bambu Filament Manager (Cloud)**: wird automatisch abgeglichen, alle 10 Minuten und beim
+  Öffnen der Seite. Neue Spulen aus Bambu Studio/Handy kommen ins Lager, gleiche Spulen werden
+  über RFID, Cloud-ID oder gleiche Merkmale (Hersteller, Material, ähnliche Farbe, Kaufgewicht)
+  zugeordnet, Restgewichte nach dem Drucken übernommen. Gewogene Werte gehen dabei nicht
+  verloren. Spulen lassen sich außerdem nach Bambu senden.
+- **AMS live** über das Bambu-Konto (ohne IP-Adresse, auch auf einem Webserver) oder direkt im
+  Heimnetz: Farbe, Material und Füllstand jedes Slots, Luftfeuchte, laufender Druck. „Im AMS“
+  und der Slot werden automatisch gesetzt. Einmal zugeordnete Spulen merken sich ihre RFID und
+  werden danach in jedem Slot erkannt.
 
 Der Startbestand sind die 18 Spulen aus der Excel-Tabelle.
 
@@ -113,11 +115,10 @@ Wichtig:
   nicht direkt abrufbar. Plesk-Backups sichern sie mit.
 - **Bambu Filament Manager** (Cloud) funktioniert auch vom Webserver aus, sofern der Hoster
   ausgehende Verbindungen erlaubt.
-- **AMS live** (Drucker im Heimnetz) funktioniert vom Webserver aus nicht, weil der Drucker nur
-  im Heimnetz erreichbar ist. Pakete und AMS-Slots lassen sich trotzdem unter „Plätze“ von Hand
-  pflegen.
-- Plesk hält die App an, wenn sie eine Weile nicht benutzt wird. Der automatische Abgleich alle
-  15 Minuten läuft nur, solange die App aktiv ist.
+- **AMS live** läuft auf dem Webserver über das Bambu-Konto. Eine IP-Adresse des Druckers wird
+  nicht gebraucht, „Drucker im Heimnetz“ bleibt leer.
+- Plesk hält die App an, wenn sie eine Weile nicht benutzt wird. Beim nächsten Öffnen startet
+  sie neu, verbindet sich mit dem Drucker und gleicht sofort mit Bambu ab.
 - **Update:** neue Dateien hochladen (den Ordner `data/` dabei nicht überschreiben),
   „NPM install“ und „App neu starten“.
 
@@ -128,11 +129,19 @@ Wichtig:
    - Mit Passwort: Passwort dazu eingeben. Bambu schickt meist zusätzlich einen Code per E-Mail.
    - **Konto mit Google oder Apple angelegt:** Passwort leer lassen. Bambu schickt dann einen
      Anmeldecode an die E-Mail-Adresse (bei Google die Gmail-Adresse).
-3. Den Code eingeben.
-4. **Von Bambu holen**: zeigt, welche Spulen aus dem Filament Manager neu ins Lager kommen,
-   welche zugeordnet werden und wo sich Restgewichte geändert haben. Auswählen, übernehmen.
-5. **Nach Bambu senden**: legt Lagerspulen im Filament Manager an oder aktualisiert sie
-   (Restgewicht, Kaufgewicht, Farbe, Notiz). Danach erscheinen sie in Bambu Studio und Bambu Handy.
+3. Den Code eingeben. Ab jetzt läuft alles automatisch:
+   - Die Spulen aus dem Filament Manager werden geholt und den Lagerspulen zugeordnet; was es im
+     Lager noch nicht gibt, kommt neu dazu (unter „Plätze“ bei „Ohne Platz“).
+   - Die Drucker des Kontos erscheinen unter „AMS live“, und die Slots werden zugeordnet.
+   - Danach wird alle 10 Minuten und beim Öffnen der Seite erneut abgeglichen.
+
+Restgewichte: Hat sich nur bei Bambu etwas geändert (z. B. nach einem Druck), gilt Bambus Wert.
+Hast du die Spule gewogen und bei Bambu hat sich nichts geändert, bleibt dein Wert. Haben sich
+beide geändert, gilt der kleinere.
+
+Von Hand gibt es außerdem **„Jetzt holen (mit Vorschau)“** und **„Nach Bambu senden“**. Senden
+legt Lagerspulen im Filament Manager an oder aktualisiert sie; danach erscheinen sie in Bambu
+Studio und Bambu Handy. Beides lässt sich vorher in einer Liste prüfen.
 
 Das Passwort wird nicht gespeichert, nur der Anmelde-Token (in `data/lager.json`, gilt etwa
 drei Monate). Gelöscht wird bei der Synchronisierung nichts, weder im Lager noch bei Bambu.
@@ -155,7 +164,13 @@ Passwort für das Google-Konto festzulegen und sich dann mit E-Mail und Passwort
 
 ## AMS live einrichten
 
-Unter **Bambu** → „Drucker im Heimnetz“ eintragen:
+Mit Bambu-Anmeldung ist nichts weiter zu tun: Die Drucker des Kontos werden über die Bambu
+Cloud verbunden („AMS live über das Bambu-Konto“). Spulen, die im Lager als „im AMS“ markiert
+sind, werden nach Material und Farbe den Bambu-Spulen in den Slots zugeordnet und merken sich
+deren RFID.
+
+Ohne Bambu-Konto, oder wenn das Lager im selben Netz wie der Drucker läuft, geht es auch direkt.
+Dazu unter **Bambu** → „Drucker im Heimnetz eintragen“:
 
 - **IP-Adresse** und **Zugangscode**: am Drucker unter Einstellungen bei WLAN/Netzwerk.
 - **Seriennummer**: in Bambu Studio unter Gerät oder auf dem Aufkleber am Drucker.

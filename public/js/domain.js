@@ -130,6 +130,16 @@ export function colorNameFor(hex) {
   return best && bestDist <= 48 ? best.name : '';
 }
 
+// Abstand zweier Farben im RGB-Raum (0 = gleich, ca. 441 = Schwarz/Weiß).
+export function colorDistance(a, b) {
+  const x = normHex(a);
+  const y = normHex(b);
+  if (!x || !y) return Infinity;
+  const [r, g, bl] = rgb(x);
+  const [r2, g2, b2] = rgb(y);
+  return Math.sqrt((r - r2) ** 2 + (g - g2) ** 2 + (bl - b2) ** 2);
+}
+
 // Helle Farben brauchen dunkle Schrift und einen Rand, damit man sie sieht.
 export function isLightColor(hex) {
   const h = normHex(hex);

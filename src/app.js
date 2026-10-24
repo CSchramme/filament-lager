@@ -4,7 +4,9 @@ import {
   colorNameFor, newId, normalizeSettings, normalizeSpool, planMove, planPlaces,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
-import { accountFromToken, BambuCloud, CloudError } from './bambu/cloud.js';
+import {
+  accountFromToken, BambuCloud, CloudError, mqttHost,
+} from './bambu/cloud.js';
 import { reconcileAms } from './bambu/ams.js';
 import { applyPull, applyPush, pullPreview, pushPreview } from './bambu/sync.js';
 import { createAuth } from './auth.js';
@@ -73,7 +75,10 @@ export function createApp({
     } catch (err) {
       if (err instanceof CloudError) {
         cloudCfg().lastError = err.message;
-        if (err.code === 'auth') cloudCfg().token = '';
+        if (err.code === 'auth') {
+          cloudCfg().token = '';
+          syncPrinters();
+        }
         await store.save();
         throw new HttpError(err.code === 'auth' ? 401 : 502, err.message);
       }
@@ -101,6 +106,71 @@ export function createApp({
     });
   }
 
+  // Drucker aus dem Bambu-Konto werden über die Cloud verbunden, außer es ist
+  // derselbe Drucker schon im Heimnetz eingetragen.
+  function cloudPrinterConfigs() {
+    const c = cloudCfg();
+    if (!c.token || !c.mqttUser || !store.bambu.options.cloudAms) return [];
+    const lan = new Set(store.bambu.printers.map((p) => p.serial));
+    return (c.devices || []).filter((d) => !lan.has(d.serial)).map((d) => ({
+      id: 'cloud:' + d.serial,
+      name: d.name,
+      kind: 'cloud',
+      host: mqttHost(c.region),
+      serial: d.serial,
+      username: c.mqttUser,
+      accessCode: c.token,
+    }));
+  }
+
+  const printerConfigs = () => [...store.bambu.printers, ...cloudPrinterConfigs()];
+
+  function syncPrinters() {
+    if (printers) printers.sync(printerConfigs());
+  }
+
+  // Holt die Drucker des Bambu-Kontos und die Kennung für die Cloud-Verbindung.
+  async function refreshCloudDevices() {
+    const { devices, mqttUser } = await withCloud(async (c) => ({ devices: await c.listDevices(), mqttUser: await c.mqttUsername() }));
+    cloudCfg().devices = devices.filter((d) => d.dev_id).map((d) => ({
+      serial: String(d.dev_id),
+      name: String(d.name || d.dev_product_name || d.dev_id),
+      model: String(d.dev_product_name || ''),
+    }));
+    cloudCfg().mqttUser = mqttUser;
+    await store.save();
+    syncPrinters();
+  }
+
+  // Automatischer Abgleich mit dem Filament Manager: neue Spulen, Zuordnungen
+  // und Restgewichte. "Im AMS" kommt dabei vom Drucker, nicht aus der Liste.
+  let syncRunning = null;
+  function autoSync() {
+    if (!store.bambu.options.autoSync || !cloudCfg().token) return Promise.resolve(null);
+    if (!syncRunning) {
+      syncRunning = (async () => {
+        const cloudSpools = await withCloud((c) => c.listSpools());
+        const result = applyPull(store, cloudSpools, 'alle', { withAms: false });
+        cloudCfg().lastPullAt = new Date().toISOString();
+        applyAmsChanges();
+        await store.save();
+        return result;
+      })().finally(() => {
+        syncRunning = null;
+      });
+    }
+    return syncRunning;
+  }
+
+  // Auch fehlgeschlagene Versuche zählen, sonst würde jede Abfrage erneut anfragen.
+  let lastAttempt = 0;
+  function autoSyncInBackground(maxAgeMs = 0) {
+    const last = Math.max(Date.parse(cloudCfg().lastPullAt || '') || 0, lastAttempt);
+    if (Date.now() - last < maxAgeMs) return;
+    lastAttempt = Date.now();
+    autoSync().catch((err) => console.error('Automatischer Bambu-Abgleich fehlgeschlagen:', err.message));
+  }
+
   function bambuView() {
     const c = cloudCfg();
     return {
@@ -112,10 +182,11 @@ export function createApp({
         lastPullAt: c.lastPullAt,
         lastPushAt: c.lastPushAt,
         lastError: c.lastError,
+        devices: (c.devices || []).length,
         pending: pendingLogin ? { status: pendingLogin.status, account: pendingLogin.account } : null,
       },
       options: store.bambu.options,
-      printers: printers ? printers.view(store.bambu.printers) : [],
+      printers: printers ? printers.view(printerConfigs()) : [],
     };
   }
 
@@ -123,17 +194,25 @@ export function createApp({
     Object.assign(cloudCfg(), {
       token: result.token,
       region,
-      account: accountFromToken(result.token) || account,
+      account: account || accountFromToken(result.token),
       connectedAt: new Date().toISOString(),
       lastError: '',
     });
     pendingLogin = null;
     await store.save();
+    // Drucker suchen und gleich abgleichen, ohne die Antwort aufzuhalten.
+    refreshCloudDevices()
+      .catch((err) => console.error('Drucker aus dem Bambu-Konto nicht abrufbar:', err.message))
+      .then(() => autoSyncInBackground());
   }
 
   // -- Lager --------------------------------------------------------------
 
-  app.get('/api/state', (req, res) => res.json({ spools: store.spools, settings: store.settings }));
+  app.get('/api/state', (req, res) => {
+    // Beim Öffnen der Seite auffrischen, wenn der letzte Abgleich etwas her ist.
+    autoSyncInBackground(2 * 60 * 1000);
+    res.json({ spools: store.spools, settings: store.settings });
+  });
 
   app.post('/api/spools', async (req, res) => {
     const body = req.body || {};
@@ -274,8 +353,9 @@ export function createApp({
   });
 
   app.post('/api/bambu/cloud/logout', async (req, res) => {
-    Object.assign(cloudCfg(), { token: '', account: '', connectedAt: '', lastError: '' });
+    Object.assign(cloudCfg(), { token: '', account: '', connectedAt: '', lastError: '', devices: [], mqttUser: '' });
     pendingLogin = null;
+    syncPrinters();
     await store.save();
     res.json(bambuView());
   });
@@ -311,9 +391,11 @@ export function createApp({
 
   app.put('/api/bambu/options', async (req, res) => {
     const o = req.body || {};
-    for (const k of ['autoAms', 'amsWeights', 'autoPull']) if (typeof o[k] === 'boolean') store.bambu.options[k] = o[k];
+    for (const k of ['autoAms', 'amsWeights', 'autoSync', 'cloudAms']) if (typeof o[k] === 'boolean') store.bambu.options[k] = o[k];
+    syncPrinters();
     applyAmsChanges();
     await store.save();
+    if (o.autoSync === true) autoSyncInBackground();
     res.json(bambuView());
   });
 
@@ -333,7 +415,7 @@ export function createApp({
   app.post('/api/bambu/printers', async (req, res) => {
     store.bambu.printers.push(printerFromBody(req.body || {}));
     await store.save();
-    printers?.sync(store.bambu.printers);
+    syncPrinters();
     res.status(201).json(bambuView());
   });
 
@@ -342,14 +424,14 @@ export function createApp({
     if (idx < 0) throw new HttpError(404, 'Drucker nicht gefunden.');
     store.bambu.printers[idx] = printerFromBody(req.body || {}, store.bambu.printers[idx]);
     await store.save();
-    printers?.sync(store.bambu.printers);
+    syncPrinters();
     res.json(bambuView());
   });
 
   app.delete('/api/bambu/printers/:id', async (req, res) => {
     store.bambu.printers = store.bambu.printers.filter((p) => p.id !== req.params.id);
     await store.save();
-    printers?.sync(store.bambu.printers);
+    syncPrinters();
     res.json(bambuView());
   });
 
@@ -417,15 +499,17 @@ export function createApp({
     res.json({ spool: store.spools[idx] });
   });
 
-  // Regelmäßiger Abgleich der Restgewichte bereits verknüpfter Spulen.
-  app.locals.autoPull = async () => {
-    if (!store.bambu.options.autoPull || !cloudCfg().token) return null;
-    const cloudSpools = await withCloud((c) => c.listSpools());
-    const keys = pullPreview(store.spools, cloudSpools).filter((i) => i.kind === 'update').map((i) => i.key);
-    const result = applyPull(store, cloudSpools, keys, { kinds: ['update'] });
-    cloudCfg().lastPullAt = new Date().toISOString();
-    await store.save();
-    return result;
+  // Für den Start und den Zeitgeber in server.js.
+  app.locals.autoSync = autoSync;
+  app.locals.startBambu = async () => {
+    syncPrinters();
+    if (!cloudCfg().token) return;
+    try {
+      await refreshCloudDevices();
+    } catch (err) {
+      console.error('Drucker aus dem Bambu-Konto nicht abrufbar:', err.message);
+    }
+    autoSyncInBackground();
   };
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'Unbekannte Adresse.' }));
