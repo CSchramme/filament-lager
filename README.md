@@ -19,6 +19,10 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
   und entfernen; eine reine Zahl wird als „Paket 3“ angezeigt.
 - In der Lagerliste öffnet der Platz-Knopf jeder Spule eine Schnellauswahl (AMS-Slot, AMS ohne
   Slot, Paket, neues Paket).
+- **Rollennummern**: Jede Rolle hat eine feste Nummer (#1, #2, …), die sich nie ändert und nach
+  dem Löschen nicht neu vergeben wird. Gut zum Aufschreiben auf die Spule; die Suche findet `#12`.
+- **API** zum Abrufen: Bestand je Farbe, Material und Platz, einzelne Rollen über ihre Nummer,
+  AMS-Belegung (siehe unten).
 - Suchen, filtern (im AMS, geöffnet, ungeöffnet, knapp) und sortieren.
 - Spulen anlegen (auch mehrere gleiche auf einmal), bearbeiten, duplizieren, löschen.
 - **Import/Export**: CSV im Excel-Format (Semikolon, deutsche Spaltennamen) und JSON-Sicherung.
@@ -183,6 +187,55 @@ sein, damit andere Programme den Status lesen dürfen.
 Den Füllstand in Prozent meldet das AMS nur für Bambu-Spulen mit RFID-Chip. Für andere Spulen
 bleibt Wiegen der genaue Weg.
 
+## API
+
+Andere Programme (Home Assistant, Skripte, Dashboards) können den Bestand lesen. Unter
+**Einstellungen → API** einen Schlüssel erzeugen; dort stehen auch fertige Links zum Kopieren.
+Der Schlüssel erlaubt nur Lesen. Mitschicken als Header `X-API-Key: <schlüssel>`, als
+`Authorization: Bearer <schlüssel>` oder in der Adresse als `?key=<schlüssel>`.
+
+| Adresse | Inhalt |
+|---|---|
+| `GET /api/v1/bestand` | Gesamtmenge, Summen nach Farbe (mit Materialien), Material und Platz, Nummern der knappen und leeren Rollen |
+| `GET /api/v1/spulen` | Alle Rollen. Filter: `farbe`, `material`, `hersteller` (Teiltreffer), `paket`, `status` (`neu`, `ok`, `knapp`, `leer`), `im_ams` (`true`/`false`) |
+| `GET /api/v1/spulen/12` | Rolle Nummer 12 |
+| `GET /api/v1/ams` | Welche Rolle in welchem AMS-Slot liegt |
+
+Beispiel:
+
+```sh
+curl -H "X-API-Key: DEIN_SCHLUESSEL" "https://lager.deine-domain.de/api/v1/spulen?farbe=schwarz"
+```
+
+```json
+{
+  "anzahl": 2,
+  "rest_g": 1580,
+  "spulen": [
+    { "nr": 6, "material": "PLA Basic", "hersteller": "Bambu Lab", "farbe": "Schwarz", "farbcode": "#000000",
+      "rest_g": 1000, "kauf_g": 1000, "mit_spule_g": 1274, "prozent": 100, "status": "neu",
+      "im_ams": false, "ams_slot": null, "paket": "6", "platz": "Paket 6", "...": "..." }
+  ]
+}
+```
+
+Home Assistant (`configuration.yaml`), Sensor mit der Gesamtmenge und allen Farben als Attribut:
+
+```yaml
+rest:
+  - resource: https://lager.deine-domain.de/api/v1/bestand
+    headers:
+      X-API-Key: !secret filament_lager_key
+    scan_interval: 600
+    sensor:
+      - name: Filament gesamt
+        unit_of_measurement: g
+        value_template: "{{ value_json.gesamt_g }}"
+        json_attributes:
+          - nach_farbe
+          - knapp
+```
+
 ## Ohne Server
 
 Die Oberfläche funktioniert auch als reine Webseite (z. B. den Ordner `public/` auf GitHub Pages
@@ -204,6 +257,7 @@ Aufbau:
   - `js/seed.js` – Startbestand aus der Excel-Tabelle
 - `start.cjs` – Startdatei für Plesk, `src/server.js` – Start, `src/app.js` – HTTP-Schnittstelle,
   `src/auth.js` – Anmeldung, `src/store.js` – Datendatei
+- `src/api-v1.js` – Lese-API mit Schlüssel
 - `src/bambu/cloud.js` – Bambu Cloud (Anmeldung, Filament Manager)
 - `src/bambu/sync.js` – Abgleich Lager ↔ Filament Manager
 - `src/bambu/printer.js` – MQTT-Verbindung zum Drucker, `src/bambu/ams.js` – AMS-Abgleich

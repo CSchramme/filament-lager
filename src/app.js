@@ -10,6 +10,7 @@ import {
 import { reconcileAms } from './bambu/ams.js';
 import { applyPull, applyPush, pullPreview, pushPreview } from './bambu/sync.js';
 import { createAuth } from './auth.js';
+import { createPublicApi, newApiKey } from './api-v1.js';
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -50,6 +51,13 @@ export function createApp({
     auth.logout(req, res);
     res.json({ ok: true });
   });
+
+  // Lese-API für andere Programme, eigener Schlüssel statt Anmeldung.
+  app.use('/api/v1', createPublicApi({
+    store,
+    apiKey: () => store.data.apiKey || '',
+    isLoggedIn: (req) => ['ok', 'none'].includes(authState(req)),
+  }));
 
   app.use('/api', (req, res, next) => {
     const state = authState(req);
@@ -226,7 +234,7 @@ export function createApp({
   app.put('/api/spools/:id', async (req, res) => {
     const idx = store.spools.findIndex((s) => s.id === req.params.id);
     if (idx < 0) throw new HttpError(404, 'Spule nicht gefunden.');
-    const { id, createdAt, ...patch } = req.body || {};
+    const { id, nr, createdAt, ...patch } = req.body || {};
     store.spools[idx] = normalizeSpool(patch, { base: store.spools[idx] });
     await store.save();
     res.json({ spool: store.spools[idx] });
@@ -251,6 +259,7 @@ export function createApp({
     const { mode = 'append', spools = [], settings } = req.body || {};
     if (settings) store.data.settings = normalizeSettings(settings);
     else if (mode !== 'append') store.data.settings.places = [];
+    if (mode !== 'append') store.data.nextNr = 1; // Nummerierung beginnt neu
     if (mode === 'seed') {
       store.data.spools = seedSpools();
     } else {
@@ -289,6 +298,14 @@ export function createApp({
     applyChanges(plan.changes);
     await store.save();
     res.json({ spools: store.spools, settings: store.settings });
+  });
+
+  // API-Schlüssel anzeigen und neu erzeugen (der alte wird dabei ungültig).
+  app.get('/api/schluessel', (req, res) => res.json({ key: store.data.apiKey || '' }));
+  app.post('/api/schluessel', async (req, res) => {
+    store.data.apiKey = newApiKey();
+    await store.save();
+    res.json({ key: store.data.apiKey });
   });
 
   // -- Bambu Cloud ----------------------------------------------------------

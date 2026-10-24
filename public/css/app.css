@@ -233,6 +233,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .spool { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .spool .txt { min-width: 0; }
 .spool .title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nr { font-family: var(--font-mono); font-weight: 500; color: var(--ink-3); margin-right: 6px; font-variant-numeric: tabular-nums; }
 .spool .sub { font-size: var(--step--1); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ring { width: 40px; height: 40px; flex: none; }
 .ring .track { fill: none; stroke: var(--surface-2); stroke-width: 6; }
@@ -467,6 +468,12 @@ body.has-movebar .toasts { bottom: calc(84px + env(safe-area-inset-bottom, 0px))
 body.has-movebar main.wrap { padding-bottom: 120px; }
 
 .panel.login { max-width: 440px; width: 100%; margin: 40px auto 0; }
+
+/* API */
+.copy-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
+.copy-row input { font-family: var(--font-mono); font-size: var(--step--1); }
+.api-links { display: grid; gap: 10px; }
+.api-link { display: grid; gap: 4px; font-size: var(--step--1); font-weight: 700; color: var(--ink-2); }
 
 /* Einstellungen */
 .types { display: grid; gap: 8px; }

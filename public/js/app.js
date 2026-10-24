@@ -214,7 +214,8 @@ function filteredSpools() {
     if (!chip(s)) return false;
     if (!words.length) return true;
     const hay = [s.colorName, s.material, s.brand, s.location, s.note, s.colorHex, s.bambu.slot].join(' ').toLowerCase();
-    return words.every((w) => hay.includes(w));
+    // "#12" sucht genau die Rolle Nummer 12
+    return words.every((w) => (/^#\d+$/.test(w) ? s.nr === Number(w.slice(1)) : hay.includes(w)));
   });
   if (prefs.sort && SORTS[prefs.sort]) {
     const key = SORTS[prefs.sort];
@@ -229,7 +230,7 @@ function renderLager() {
   $view.innerHTML = `
     <section class="stats" id="stats"></section>
     <section class="toolbar">
-      <label class="search">${icons.search}<input type="search" id="q" placeholder="Farbe, Material oder Lagerort suchen" aria-label="Suchen" value="${esc(prefs.q)}"></label>
+      <label class="search">${icons.search}<input type="search" id="q" placeholder="Farbe, Material, Ort oder #Nummer suchen" aria-label="Suchen" value="${esc(prefs.q)}"></label>
       <div class="chips" id="chips"></div>
       <select id="material" aria-label="Material filtern" style="width:auto">
         <option value="">Alle Materialien</option>
@@ -307,7 +308,7 @@ function rowHtml(s) {
   const share = remainingShare(s);
   const type = spoolTypeOf(s, app.settings);
   return `<article class="row item" data-id="${esc(s.id)}" tabindex="0" aria-label="${esc(spoolLabel(s))}">
-    <div class="c-spool spool">${ring(s.colorHex, share)}<div class="txt"><div class="title">${esc(s.colorName || s.colorHex)}</div><div class="sub">${esc(s.material)}${s.brand ? ' · ' + esc(s.brand) : ''}</div></div></div>
+    <div class="c-spool spool">${ring(s.colorHex, share)}<div class="txt"><div class="title"><span class="nr">#${s.nr ?? '–'}</span>${esc(s.colorName || s.colorHex)}</div><div class="sub">${esc(s.material)}${s.brand ? ' · ' + esc(s.brand) : ''}</div></div></div>
     <div class="c-rest rest"><span class="g num">${fmt(s.netWeight)} <small>g</small></span><div class="meter" data-level="${level}"><span style="width:${(share * 100).toFixed(1)}%"></span></div></div>
     <div class="c-gross r num" title="${esc(type.name)}, Tara ${fmt(type.tare)} g">${fmt(grossOf(s, app.settings))}</div>
     <div class="c-buy r num">${fmt(s.purchaseWeight)}</div>
@@ -548,7 +549,7 @@ function targetLabel(t) {
 }
 
 const slotOccupant = (slot) => app.spools.find((s) => s.inAms && s.bambu.slot === slot);
-const shortName = (s) => s.colorName || s.colorHex;
+const shortName = (s) => `${s.nr ? '#' + s.nr + ' ' : ''}${s.colorName || s.colorHex}`;
 
 function nextPlaceName() {
   const nums = placeList(app.settings, app.spools).filter((p) => /^\d+$/.test(p)).map(Number);
@@ -629,7 +630,7 @@ function renderPlaces() {
 
 function chipHtml(s) {
   return `<button type="button" class="spool-chip" draggable="true" data-chip-id="${esc(s.id)}" aria-pressed="${app.selected.has(s.id)}">`
-    + `${ring(s.colorHex, remainingShare(s))}<span class="txt"><span class="name">${esc(shortName(s))}</span>`
+    + `${ring(s.colorHex, remainingShare(s))}<span class="txt"><span class="name"><span class="nr">#${s.nr ?? '–'}</span>${esc(s.colorName || s.colorHex)}</span>`
     + `<span class="meta">${esc(s.material)} · ${fmt(s.netWeight)} g</span></span></button>`;
 }
 
@@ -841,7 +842,7 @@ function slotHtml(printer, t) {
   const candidates = app.spools.filter((s) => s !== linked).sort((a, b) =>
     (filamentTypeOf(b.material) === t.type) - (filamentTypeOf(a.material) === t.type)
     || colorDistance(a.colorHex, t.colorHex) - colorDistance(b.colorHex, t.colorHex));
-  const options = [...(linked ? [linked] : []), ...candidates.slice(0, 40)].map((s) => `<option value="${esc(s.id)}" ${linked && linked.id === s.id ? 'selected' : ''}>${esc(s.colorName || s.colorHex)} · ${esc(s.material)} · ${fmt(s.netWeight)} g${s.location ? ' · Ort ' + esc(s.location) : ''}</option>`).join('');
+  const options = [...(linked ? [linked] : []), ...candidates.slice(0, 40)].map((s) => `<option value="${esc(s.id)}" ${linked && linked.id === s.id ? 'selected' : ''}>#${s.nr ?? '–'} ${esc(s.colorName || s.colorHex)} · ${esc(s.material)} · ${fmt(s.netWeight)} g${s.location ? ' · Ort ' + esc(s.location) : ''}</option>`).join('');
   return `<div class="slot ${t.active ? 'active' : ''}" data-printer="${esc(printer.id)}" data-slot="${esc(t.slot)}">
     <div class="slot-top">${ring(t.colorHex || '#9AA0A6', share)}<div class="txt">
       <div class="slot-id">${esc(t.slot)}${t.active ? ' · druckt' : ''}</div>
@@ -1023,7 +1024,49 @@ function renderSettings() {
       <div class="actions"><button class="btn small" type="button" data-action="seed">Startdaten aus der Excel-Tabelle neu laden</button>
         ${app.backend.auth === 'ok' ? '<button class="btn small" type="button" data-action="app-logout">Abmelden</button>' : ''}</div>
     </div>
-  </section>`;
+  </section>
+  ${server ? `<section class="panel">
+    <div class="panel-head"><h2>API</h2><p>Bestand für andere Programme abrufen, z. B. Home Assistant</p></div>
+    <div id="api-body" class="small muted">Lädt …</div>
+  </section>` : ''}`;
+  if (server) updateApiPanel();
+}
+
+async function updateApiPanel() {
+  const el = document.getElementById('api-body');
+  if (!el) return;
+  let key = '';
+  try {
+    key = await app.backend.getApiKey();
+  } catch (err) {
+    el.textContent = err.message;
+    return;
+  }
+  if (!key) {
+    el.innerHTML = `<p>Jede Rolle hat eine feste Nummer (#1, #2, …). Über die API lässt sich abrufen, wie viel Filament es je Farbe und Material gibt, wo jede Rolle liegt und was im AMS steckt. Dafür braucht es einen Schlüssel.</p>
+      <div class="actions"><button class="btn primary" type="button" data-action="api-key">API-Schlüssel erzeugen</button></div>`;
+    el.classList.remove('small', 'muted');
+    return;
+  }
+  const apiBase = new URL('api/v1/', location.href).href;
+  const examples = [
+    ['Bestand nach Farbe, Material und Platz', 'bestand'],
+    ['Alle Rollen', 'spulen'],
+    ['Rolle #1', 'spulen/1'],
+    ['Nur schwarze Rollen', 'spulen?farbe=schwarz'],
+    ['Knappe Rollen', 'spulen?status=knapp'],
+    ['AMS-Belegung', 'ams'],
+  ];
+  const withKey = (p) => `${apiBase}${p}${p.includes('?') ? '&' : '?'}key=${encodeURIComponent(key)}`;
+  el.classList.remove('small', 'muted');
+  el.innerHTML = `
+    <div class="fields">
+      <label class="field full"><span>API-Schlüssel</span><span class="copy-row"><input id="api-key" readonly value="${esc(key)}"><button class="btn" type="button" data-action="copy" data-target="api-key">Kopieren</button></span></label>
+    </div>
+    <p class="small muted">Mitschicken als Header <code>X-API-Key</code> oder in der Adresse als <code>?key=…</code>. Mit dem Schlüssel lässt sich der Bestand nur lesen, nicht ändern.</p>
+    <div class="api-links">${examples.map(([label, p], i) => `<div class="api-link"><span>${esc(label)}</span>
+      <span class="copy-row"><input id="api-ex-${i}" readonly value="${esc(withKey(p))}"><a class="btn small" href="${esc(withKey(p))}" target="_blank" rel="noopener">Öffnen</a><button class="btn small" type="button" data-action="copy" data-target="api-ex-${i}">Kopieren</button></span></div>`).join('')}</div>
+    <div class="actions"><button class="btn small ghost danger" type="button" data-action="api-key">Neuen Schlüssel erzeugen</button></div>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1048,6 +1091,24 @@ const actions = {
   place: (el) => placeDialog(findSpool(el.dataset.id)),
   'place-add': () => placeAddDialog(),
   'place-edit': (el) => placeEditDialog(el.dataset.place),
+  'api-key': () => run(async () => {
+    const hasKey = Boolean(document.getElementById('api-key'));
+    if (hasKey && !(await confirmDialog('Einen neuen Schlüssel erzeugen? Programme, die den alten nutzen, bekommen dann keinen Zugriff mehr.', 'Neu erzeugen', true))) return;
+    await app.backend.newApiKey();
+    await updateApiPanel();
+    toast('API-Schlüssel erzeugt');
+  }),
+  copy: async (el) => {
+    const input = document.getElementById(el.dataset.target);
+    try {
+      await navigator.clipboard.writeText(input.value);
+      toast('Kopiert');
+    } catch {
+      input.focus();
+      input.select();
+      toast('Markiert. Mit ⌘+C bzw. Strg+C kopieren.');
+    }
+  },
   'app-logout': () => run(async () => {
     await app.backend.appLogout();
     location.reload();

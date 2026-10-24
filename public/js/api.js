@@ -2,7 +2,7 @@
 // alle Änderungen dorthin. Ohne Server (z. B. als statische Seite) speichert
 // das Lager im Browser; die Bambu-Anbindung ist dann nicht verfügbar.
 import {
-  newId, normalizeSettings, normalizeSpool, placeList, planMove, planPlaces,
+  assignNumbers, newId, normalizeSettings, normalizeSpool, placeList, planMove, planPlaces,
 } from './domain.js';
 import { seedSpools } from './seed.js';
 
@@ -35,6 +35,8 @@ class ServerBackend {
 
   appLogin(password) { return this.req('POST', 'api/login', { password }); }
   appLogout() { return this.req('POST', 'api/logout', {}); }
+  getApiKey() { return this.req('GET', 'api/schluessel').then((d) => d.key); }
+  newApiKey() { return this.req('POST', 'api/schluessel', {}).then((d) => d.key); }
 
   getState() { return this.req('GET', 'api/state'); }
   createSpools(spools) { return this.req('POST', 'api/spools', { spools }).then((d) => d.spools); }
@@ -85,6 +87,7 @@ class LocalBackend {
   write(data) {
     // Pakete dauerhaft merken, damit ein leeres Paket nicht verschwindet.
     data.settings.places = placeList(data.settings, data.spools);
+    assignNumbers(data);
     this.memory = data;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -99,11 +102,12 @@ class LocalBackend {
       const data = {
         settings: normalizeSettings(raw.settings),
         spools: (raw.spools || []).map((s) => normalizeSpool(s, { keepTimestamps: true })),
+        nextNr: raw.nextNr,
       };
       data.settings.places = placeList(data.settings, data.spools);
-      return data;
+      return assignNumbers(data);
     }
-    const data = { settings: normalizeSettings(), spools: seedSpools() };
+    const data = { settings: normalizeSettings(), spools: seedSpools(), nextNr: 1 };
     this.write(data);
     return data;
   }
@@ -124,7 +128,7 @@ class LocalBackend {
     const data = this.load();
     const idx = data.spools.findIndex((s) => s.id === id);
     if (idx < 0) throw new Error('Spule nicht gefunden.');
-    const { id: _id, createdAt, ...rest } = patch;
+    const { id: _id, nr, createdAt, ...rest } = patch;
     data.spools[idx] = normalizeSpool(rest, { base: data.spools[idx] });
     this.write(data);
     return data.spools[idx];
@@ -171,6 +175,7 @@ class LocalBackend {
     const data = this.load();
     if (settings) data.settings = normalizeSettings(settings);
     else if (mode !== 'append') data.settings.places = [];
+    if (mode !== 'append') data.nextNr = 1; // Nummerierung beginnt neu
     if (mode === 'seed') {
       data.spools = seedSpools();
     } else {

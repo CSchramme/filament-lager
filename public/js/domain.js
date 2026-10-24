@@ -250,8 +250,10 @@ export function normalizeSpool(input, { base = null, now = new Date().toISOStrin
   const purchaseWeight = Math.max(0, toInt(src.purchaseWeight, 1000));
   const netWeight = Math.max(0, toInt(src.netWeight, purchaseWeight));
   const colorName = str(src.colorName);
+  const nr = toInt(src.nr, null);
   return {
     id: str(src.id) || newId(),
+    nr: nr && nr > 0 ? nr : null, // feste Rollennummer, vergibt assignNumbers()
     material: str(src.material) || 'PLA Basic',
     brand: str(src.brand),
     colorName,
@@ -370,7 +372,26 @@ export function planPlaces(settings, spools, { action, name, to }) {
 }
 
 export function spoolLabel(spool) {
-  return [spool.material, spool.colorName || spool.colorHex].filter(Boolean).join(' · ');
+  const name = [spool.material, spool.colorName || spool.colorHex].filter(Boolean).join(' · ');
+  return spool.nr ? `#${spool.nr} ${name}` : name;
+}
+
+// Gibt jeder Rolle eine feste Nummer. Nummern werden nie neu vergeben, auch
+// nicht nach dem Löschen; doppelte (z. B. nach einem Import) bekommen eine neue.
+export function assignNumbers(data) {
+  let next = Math.max(toInt(data.nextNr, 1) || 1, ...data.spools.map((s) => (s.nr || 0) + 1));
+  const seen = new Set();
+  for (const s of data.spools) {
+    if (!s.nr || seen.has(s.nr)) s.nr = next++;
+    seen.add(s.nr);
+  }
+  data.nextNr = next;
+  return data;
+}
+
+export function findSpoolByRef(spools, ref) {
+  const r = str(ref).replace(/^#/, '');
+  return (/^\d+$/.test(r) && spools.find((s) => s.nr === Number(r))) || spools.find((s) => s.id === r) || null;
 }
 
 export function summarize(spools, settings) {
@@ -406,7 +427,7 @@ export function summarize(spools, settings) {
 // ---------------------------------------------------------------------------
 // CSV im Excel-Format (Semikolon, deutsche Spaltennamen)
 
-export const CSV_COLUMNS = ['Art', 'Hersteller', 'Farbe', 'Farbcode', 'Kaufgewicht', 'Gewicht mit Spule', 'Gewicht',
+export const CSV_COLUMNS = ['Nr', 'Art', 'Hersteller', 'Farbe', 'Farbcode', 'Kaufgewicht', 'Gewicht mit Spule', 'Gewicht',
   'Lagerort', 'geöffnet?', 'im AMS', 'Spulenart', 'Notiz'];
 
 function csvCell(v) {
@@ -418,7 +439,7 @@ export function toCsv(spools, settings) {
   const lines = [CSV_COLUMNS.join(';')];
   for (const s of spools) {
     lines.push([
-      s.material, s.brand, s.colorName, s.colorHex, s.purchaseWeight, grossOf(s, settings), s.netWeight,
+      s.nr ?? '', s.material, s.brand, s.colorName, s.colorHex, s.purchaseWeight, grossOf(s, settings), s.netWeight,
       s.location, s.opened ? 'ja' : 'nein', s.inAms ? 'ja' : 'nein', spoolTypeOf(s, settings).name, s.note,
     ].map(csvCell).join(';'));
   }
@@ -468,6 +489,7 @@ export function parseCsv(text) {
 }
 
 const HEADER_ALIASES = {
+  nr: ['nr', 'nummer', 'rollennummer', 'spulennummer'],
   material: ['art', 'material', 'typ', 'sorte', 'filament'],
   brand: ['hersteller', 'marke', 'brand', 'vendor'],
   colorName: ['farbe', 'farbname', 'color', 'colour'],
@@ -511,6 +533,7 @@ export function spoolsFromRows(rows, settings) {
     if (netWeight === null && gross !== null) netWeight = netFromGross(gross, type.tare);
     if (netWeight === null) netWeight = purchaseWeight;
     spools.push(normalizeSpool({
+      nr: rec.nr,
       material: rec.material,
       brand: rec.brand,
       colorName: rec.colorName,

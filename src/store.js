@@ -2,7 +2,9 @@
 // nacheinander und über eine temporäre Datei, damit nichts halb geschrieben wird.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { normalizeSettings, normalizeSpool, placeList } from '../public/js/domain.js';
+import {
+  assignNumbers, normalizeSettings, normalizeSpool, placeList,
+} from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 
 function emptyBambu() {
@@ -45,9 +47,12 @@ export class Store {
         },
       };
       delete this.data.bambu.options.autoPull; // ersetzt durch autoSync
+      this.data.nextNr = raw.nextNr;
+      this.data.apiKey = raw.apiKey || '';
+      assignNumbers(this.data);
       this.data.settings.places = placeList(this.data.settings, this.data.spools);
     } else {
-      this.data = { version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu() };
+      this.data = { version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '' };
       await this.save();
     }
     return this.data;
@@ -56,6 +61,7 @@ export class Store {
   save() {
     // Pakete dauerhaft merken, damit ein leeres Paket nicht verschwindet.
     this.data.settings.places = placeList(this.data.settings, this.data.spools);
+    assignNumbers(this.data);
     const json = JSON.stringify(this.data, null, 2);
     this.queue = this.queue.catch(() => {}).then(async () => {
       await fs.mkdir(path.dirname(this.file), { recursive: true });
