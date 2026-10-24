@@ -1,0 +1,408 @@
+// Fachlogik des Filament-Lagers. Wird im Browser und im Node-Server genutzt,
+// deshalb ohne Abhängigkeiten und ohne DOM-Zugriffe.
+
+export const MATERIALS = [
+  'PLA Basic', 'PLA Matte', 'PLA Translucent', 'PLA Silk+', 'PLA Tough+', 'PLA Metal', 'PLA Sparkle',
+  'PLA Marble', 'PLA Galaxy', 'PLA Glow', 'PLA Wood', 'PLA-CF', 'PETG HF', 'PETG Basic',
+  'PETG Translucent', 'PETG-CF', 'ABS', 'ASA', 'PC', 'TPU 95A HF', 'TPU for AMS', 'PVA', 'Support for PLA',
+];
+
+export const BRANDS = ['Bambu Lab', 'Elegoo', 'eSUN', 'Sunlu', 'Polymaker', 'Prusament', 'Geeetech', 'Jayo', 'Overture'];
+
+export const PURCHASE_WEIGHTS = [250, 500, 750, 1000, 2000, 3000];
+
+// Farben der Bambu-Lab-Sortimente mit den deutschen Namen aus der Tabelle.
+export const COLOR_PRESETS = [
+  { name: 'Weiß', hex: '#FFFFFF' },
+  { name: 'Hell Grau', hex: '#D1D3D5' },
+  { name: 'Silber', hex: '#A6A9AA' },
+  { name: 'Grau', hex: '#8E9089' },
+  { name: 'Dunkelgrau', hex: '#545454' },
+  { name: 'Blaugrau', hex: '#5B6579' },
+  { name: 'Schwarz', hex: '#000000' },
+  { name: 'Beige', hex: '#F7E6DE' },
+  { name: 'Gelb', hex: '#F4EE2A' },
+  { name: 'Sonnenblumengelb', hex: '#FEC600' },
+  { name: 'Gold', hex: '#E4BD68' },
+  { name: 'Kürbis Orange', hex: '#FF9016' },
+  { name: 'Orange', hex: '#FF6A13' },
+  { name: 'Rot', hex: '#C12E1F' },
+  { name: 'Kastanienrot', hex: '#9D2235' },
+  { name: 'Pink', hex: '#F55A74' },
+  { name: 'Magenta', hex: '#EC008C' },
+  { name: 'Lila', hex: '#5E43B7' },
+  { name: 'Indigo Violett', hex: '#482960' },
+  { name: 'Blau', hex: '#0A2989' },
+  { name: 'Kobaltblau', hex: '#0056B8' },
+  { name: 'Cyan', hex: '#0086D6' },
+  { name: 'Türkis', hex: '#00B1B7' },
+  { name: 'Bambus Grün', hex: '#00AE42' },
+  { name: 'Mistelzweig Grün', hex: '#3F8E43' },
+  { name: 'Hell Grün', hex: '#BECF00' },
+  { name: 'Bronze', hex: '#847D48' },
+  { name: 'Braun', hex: '#9D432C' },
+  { name: 'Kakaobraun', hex: '#6F5034' },
+];
+
+// Bambu-Filament-IDs (tray_info_idx), damit Bambu Studio die Spule dem
+// richtigen Profil zuordnet. Nur für Hersteller "Bambu Lab".
+const BAMBU_FILAMENT_IDS = {
+  'pla basic': 'GFA00', 'pla matte': 'GFA01', 'pla metal': 'GFA02', 'pla silk': 'GFA05', 'pla silk+': 'GFA06',
+  'pla marble': 'GFA07', 'pla sparkle': 'GFA08', 'pla tough': 'GFA09', 'pla aero': 'GFA11', 'pla glow': 'GFA12',
+  'pla dynamic': 'GFA13', 'pla galaxy': 'GFA15', 'pla wood': 'GFA16', 'pla-cf': 'GFA50',
+  'abs': 'GFB00', 'asa': 'GFB01', 'pc': 'GFC00', 'petg basic': 'GFG00', 'petg translucent': 'GFG01',
+  'petg hf': 'GFG02', 'petg-cf': 'GFG50', 'tpu 95a hf': 'GFU00', 'tpu 95a': 'GFU01', 'tpu for ams': 'GFU02',
+  'pva': 'GFS04', 'support for pla': 'GFS02',
+};
+
+const BASE_TYPES = ['PLA-CF', 'PETG-CF', 'PET-CF', 'PA6-CF', 'PAHT-CF', 'PA-CF', 'ABS-GF', 'PLA', 'PETG', 'PCTG',
+  'ABS', 'ASA', 'TPU', 'PC', 'PA', 'PVA', 'HIPS', 'BVOH', 'PPS'];
+
+export function defaultSettings() {
+  return {
+    spoolTypes: [
+      { id: 'plastik', name: 'Bambu Plastik', tare: 274 },
+      { id: 'pappe', name: 'Pappe', tare: 0 },
+    ],
+    lowStock: 150,
+  };
+}
+
+export function newId() {
+  const bytes = new Uint8Array(8);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function str(v) {
+  return v === undefined || v === null ? '' : String(v).trim();
+}
+
+function toInt(v, fallback) {
+  if (v === '' || v === null || v === undefined) return fallback;
+  const n = Math.round(Number(String(v).replace(',', '.')));
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function toBool(v, fallback) {
+  if (typeof v === 'boolean') return v;
+  const s = str(v).toLowerCase();
+  if (['ja', 'j', 'yes', 'y', 'true', '1', 'x', 'wahr'].includes(s)) return true;
+  if (['nein', 'n', 'no', 'false', '0', 'falsch'].includes(s)) return false;
+  return fallback;
+}
+
+// Nimmt "FF6A13", "#ff6a13" oder Bambus "FF6A13FF" an und liefert "#FF6A13".
+export function normHex(v) {
+  const s = str(v).replace(/^#/, '');
+  if (!/^[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(s)) return '';
+  return '#' + s.slice(0, 6).toUpperCase();
+}
+
+function rgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+export function colorHexFor(name) {
+  const key = str(name).toLowerCase().replace(/[\s-]+/g, ' ');
+  const hit = COLOR_PRESETS.find((c) => c.name.toLowerCase() === key);
+  return hit ? hit.hex : '';
+}
+
+// Farbname zu einem Hexwert: exakter Treffer oder die nächstgelegene Bambu-Farbe.
+export function colorNameFor(hex) {
+  const h = normHex(hex);
+  if (!h) return '';
+  let best = null;
+  let bestDist = Infinity;
+  const [r, g, b] = rgb(h);
+  for (const c of COLOR_PRESETS) {
+    const [r2, g2, b2] = rgb(c.hex);
+    const d = Math.sqrt((r - r2) ** 2 + (g - g2) ** 2 + (b - b2) ** 2);
+    if (d < bestDist) {
+      bestDist = d;
+      best = c;
+    }
+  }
+  return best && bestDist <= 48 ? best.name : '';
+}
+
+// Helle Farben brauchen dunkle Schrift und einen Rand, damit man sie sieht.
+export function isLightColor(hex) {
+  const h = normHex(hex);
+  if (!h) return false;
+  const [r, g, b] = rgb(h);
+  return 0.299 * r + 0.587 * g + 0.114 * b > 186;
+}
+
+export function filamentTypeOf(material) {
+  const m = str(material).toUpperCase();
+  const hit = BASE_TYPES.find((t) => m === t || m.startsWith(t + ' ') || m.startsWith(t + '-'));
+  return hit || m.split(/\s+/)[0] || 'PLA';
+}
+
+export function bambuFilamentId(material, brand) {
+  if (!/bambu/i.test(str(brand))) return '';
+  return BAMBU_FILAMENT_IDS[str(material).toLowerCase()] || '';
+}
+
+// Umkehrung für AMS-Daten: "GFA00" -> "PLA Basic"
+export function materialForFilamentId(id) {
+  const key = Object.keys(BAMBU_FILAMENT_IDS).find((k) => BAMBU_FILAMENT_IDS[k] === str(id).toUpperCase());
+  if (!key) return '';
+  return MATERIALS.find((m) => m.toLowerCase() === key)
+    || key.split(' ').map((w, i) => (i === 0 || w.length <= 3 ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1))).join(' ');
+}
+
+export function normalizeSettings(input) {
+  const base = defaultSettings();
+  const src = input && typeof input === 'object' ? input : {};
+  const seen = new Set();
+  const spoolTypes = (Array.isArray(src.spoolTypes) ? src.spoolTypes : base.spoolTypes)
+    .map((t) => ({ id: str(t && t.id) || newId(), name: str(t && t.name), tare: Math.max(0, toInt(t && t.tare, 0)) }))
+    .filter((t) => t.name && !seen.has(t.id) && seen.add(t.id));
+  return {
+    spoolTypes: spoolTypes.length ? spoolTypes : base.spoolTypes,
+    lowStock: Math.max(0, toInt(src.lowStock, base.lowStock)),
+  };
+}
+
+export function spoolTypeOf(spool, settings) {
+  const types = settings.spoolTypes;
+  return types.find((t) => t.id === spool.spoolTypeId) || types[0];
+}
+
+// Sucht eine Spulenart über Namen wie "Plastik" oder "pappe".
+export function findSpoolType(value, settings) {
+  const v = str(value).toLowerCase();
+  if (!v) return null;
+  return settings.spoolTypes.find((t) => t.id === v || t.name.toLowerCase() === v)
+    || settings.spoolTypes.find((t) => t.name.toLowerCase().includes(v) || v.includes(t.name.toLowerCase()))
+    || null;
+}
+
+export function tareOf(spool, settings) {
+  const t = spoolTypeOf(spool, settings);
+  return t ? t.tare : 0;
+}
+
+export function grossOf(spool, settings) {
+  return spool.netWeight + tareOf(spool, settings);
+}
+
+export function netFromGross(gross, tare) {
+  return Math.max(0, Math.round(Number(gross) - Number(tare)));
+}
+
+export function remainingShare(spool) {
+  if (!spool.purchaseWeight) return 0;
+  return Math.max(0, Math.min(1, spool.netWeight / spool.purchaseWeight));
+}
+
+// "leer", "knapp", "neu" oder "ok"
+export function stockLevel(spool, settings) {
+  if (spool.netWeight <= 0) return 'leer';
+  if (spool.netWeight < settings.lowStock) return 'knapp';
+  if (!spool.opened && spool.netWeight >= spool.purchaseWeight) return 'neu';
+  return 'ok';
+}
+
+function normalizeBambu(src) {
+  const b = src && typeof src === 'object' ? src : {};
+  const cloudId = toInt(b.cloudId, null);
+  return {
+    cloudId: cloudId && cloudId > 0 ? cloudId : null,
+    rfid: str(b.rfid).toUpperCase(),
+    printerId: str(b.printerId),
+    slot: str(b.slot),
+    slotColor: normHex(b.slotColor),
+    syncedNet: toInt(b.syncedNet, null),
+    syncedAt: str(b.syncedAt),
+  };
+}
+
+// Bringt eine Spule in die gespeicherte Form. "base" ist der bisherige Stand
+// beim Bearbeiten; Felder aus "input" überschreiben ihn.
+export function normalizeSpool(input, { base = null, now = new Date().toISOString(), keepTimestamps = false } = {}) {
+  const src = { ...(base || {}), ...(input || {}) };
+  if (input && input.bambu && base && base.bambu) src.bambu = { ...base.bambu, ...input.bambu };
+  const purchaseWeight = Math.max(0, toInt(src.purchaseWeight, 1000));
+  const netWeight = Math.max(0, toInt(src.netWeight, purchaseWeight));
+  const colorName = str(src.colorName);
+  return {
+    id: str(src.id) || newId(),
+    material: str(src.material) || 'PLA Basic',
+    brand: str(src.brand),
+    colorName,
+    colorHex: normHex(src.colorHex) || colorHexFor(colorName) || '#9AA0A6',
+    purchaseWeight,
+    netWeight,
+    spoolTypeId: str(src.spoolTypeId) || 'plastik',
+    location: str(src.location),
+    opened: toBool(src.opened, netWeight < purchaseWeight),
+    inAms: toBool(src.inAms, false),
+    note: str(src.note),
+    bambu: normalizeBambu(src.bambu),
+    createdAt: str(src.createdAt) || now,
+    updatedAt: keepTimestamps && src.updatedAt ? str(src.updatedAt) : now,
+  };
+}
+
+export function spoolLabel(spool) {
+  return [spool.material, spool.colorName || spool.colorHex].filter(Boolean).join(' · ');
+}
+
+export function summarize(spools, settings) {
+  const byMaterial = new Map();
+  let totalNet = 0;
+  let inAms = 0;
+  let low = 0;
+  let empty = 0;
+  let sealed = 0;
+  for (const s of spools) {
+    totalNet += s.netWeight;
+    if (s.inAms) inAms += 1;
+    const level = stockLevel(s, settings);
+    if (level === 'knapp') low += 1;
+    if (level === 'leer') empty += 1;
+    if (level === 'neu') sealed += 1;
+    const m = byMaterial.get(s.material) || { material: s.material, count: 0, net: 0 };
+    m.count += 1;
+    m.net += s.netWeight;
+    byMaterial.set(s.material, m);
+  }
+  return {
+    count: spools.length,
+    totalNet,
+    inAms,
+    low,
+    empty,
+    sealed,
+    byMaterial: [...byMaterial.values()].sort((a, b) => b.net - a.net),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// CSV im Excel-Format (Semikolon, deutsche Spaltennamen)
+
+export const CSV_COLUMNS = ['Art', 'Hersteller', 'Farbe', 'Farbcode', 'Kaufgewicht', 'Gewicht mit Spule', 'Gewicht',
+  'Lagerort', 'geöffnet?', 'im AMS', 'Spulenart', 'Notiz'];
+
+function csvCell(v) {
+  const s = String(v ?? '');
+  return /[";\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+export function toCsv(spools, settings) {
+  const lines = [CSV_COLUMNS.join(';')];
+  for (const s of spools) {
+    lines.push([
+      s.material, s.brand, s.colorName, s.colorHex, s.purchaseWeight, grossOf(s, settings), s.netWeight,
+      s.location, s.opened ? 'ja' : 'nein', s.inAms ? 'ja' : 'nein', spoolTypeOf(s, settings).name, s.note,
+    ].map(csvCell).join(';'));
+  }
+  return '﻿' + lines.join('\r\n') + '\r\n';
+}
+
+export function parseCsv(text) {
+  const src = String(text || '').replace(/^﻿/, '');
+  const firstLine = src.split(/\r?\n/, 1)[0] || '';
+  const delimiter = [';', '\t', ','].reduce((best, d) =>
+    firstLine.split(d).length > firstLine.split(best).length ? d : best, ';');
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let quoted = false;
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    if (quoted) {
+      if (ch === '"' && src[i + 1] === '"') {
+        cell += '"';
+        i += 1;
+      } else if (ch === '"') {
+        quoted = false;
+      } else {
+        cell += ch;
+      }
+    } else if (ch === '"' && cell === '') {
+      quoted = true;
+    } else if (ch === delimiter) {
+      row.push(cell);
+      cell = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && src[i + 1] === '\n') i += 1;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += ch;
+    }
+  }
+  if (cell !== '' || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((c) => c.trim() !== ''));
+}
+
+const HEADER_ALIASES = {
+  material: ['art', 'material', 'typ', 'sorte', 'filament'],
+  brand: ['hersteller', 'marke', 'brand', 'vendor'],
+  colorName: ['farbe', 'farbname', 'color', 'colour'],
+  colorHex: ['farbcode', 'hex', 'hexcode', 'colorhex'],
+  purchaseWeight: ['kaufgewicht', 'nenngewicht', 'sollgewicht', 'gesamtgewicht'],
+  gross: ['gewichtmitspule', 'brutto', 'bruttogewicht', 'gewogen'],
+  netWeight: ['gewicht', 'restgewicht', 'netto', 'nettogewicht', 'rest'],
+  location: ['paketnummer', 'lagerort', 'ort', 'paket', 'kiste', 'box'],
+  opened: ['geoffnet', 'geöffnet', 'offen', 'opened'],
+  inAms: ['imams', 'ams'],
+  spoolType: ['spulenart', 'spule', 'spooltype'],
+  note: ['notiz', 'bemerkung', 'note', 'notizen', 'kommentar'],
+};
+
+function headerKey(h) {
+  const k = String(h).toLowerCase().replace(/ä/g, 'a').replace(/ö/g, 'o').replace(/ü/g, 'u').replace(/[^a-z]/g, '');
+  for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
+    if (aliases.some((a) => a.replace(/ö/g, 'o') === k)) return field;
+  }
+  return null;
+}
+
+// Wandelt CSV-Zeilen (erste Zeile = Überschriften) in Spulen um.
+export function spoolsFromRows(rows, settings) {
+  if (!rows.length) return [];
+  const keys = rows[0].map(headerKey);
+  if (!keys.includes('material') && !keys.includes('colorName')) {
+    throw new Error('Keine Spalte "Art" oder "Farbe" gefunden. Bitte die Kopfzeile der Tabelle mitexportieren.');
+  }
+  const spools = [];
+  for (const row of rows.slice(1)) {
+    const rec = {};
+    keys.forEach((k, i) => {
+      if (k && rec[k] === undefined) rec[k] = (row[i] ?? '').trim();
+    });
+    if (!rec.material && !rec.colorName) continue;
+    const type = findSpoolType(rec.spoolType, settings) || settings.spoolTypes[0];
+    const purchaseWeight = toInt(rec.purchaseWeight, 1000);
+    let netWeight = toInt(rec.netWeight, null);
+    const gross = toInt(rec.gross, null);
+    if (netWeight === null && gross !== null) netWeight = netFromGross(gross, type.tare);
+    if (netWeight === null) netWeight = purchaseWeight;
+    spools.push(normalizeSpool({
+      material: rec.material,
+      brand: rec.brand,
+      colorName: rec.colorName,
+      colorHex: rec.colorHex,
+      purchaseWeight,
+      netWeight,
+      spoolTypeId: type.id,
+      location: rec.location,
+      opened: rec.opened,
+      inAms: rec.inAms,
+      note: rec.note,
+    }));
+  }
+  return spools;
+}
