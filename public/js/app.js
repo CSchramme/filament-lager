@@ -1,13 +1,16 @@
 import { createBackend } from './api.js';
 import {
-  BRANDS, COLOR_PRESETS, MATERIALS, PURCHASE_WEIGHTS, colorHexFor, colorNameFor, filamentTypeOf, grossOf,
-  netFromGross, normHex, parseCsv, remainingShare, spoolLabel, spoolTypeOf, spoolsFromRows, stockLevel, summarize, toCsv,
+  BRANDS, COLOR_PRESETS, MATERIALS, PURCHASE_WEIGHTS, amsSlots, colorHexFor, colorNameFor, filamentTypeOf, grossOf,
+  netFromGross, normHex, parseCsv, placeList, placeName, remainingShare, spoolLabel, spoolPlace, spoolTypeOf,
+  spoolsFromRows, stockLevel, summarize, toCsv,
 } from './domain.js';
 import {
   download, esc, fmt, fmtKg, icons, openDialog, readFile, ring, timeAgo, toast,
 } from './ui.js';
 
-const app = { backend: null, spools: [], settings: null, bambu: null, view: 'lager', poll: null, printersSig: '' };
+const app = {
+  backend: null, spools: [], settings: null, bambu: null, view: 'lager', poll: null, printersSig: '', selected: new Set(),
+};
 const $view = document.getElementById('view');
 
 // Ansicht merken (Filter, Sortierung). Nur Komfort, darf fehlen.
@@ -49,8 +52,44 @@ async function init() {
   $view.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target.matches('.row.item')) spoolDialog(findSpool(e.target.dataset.id));
   });
+  initDragAndDrop();
   window.addEventListener('hashchange', route);
   route();
+}
+
+// Ziehen und Ablegen in der Ansicht "Plätze" (Maus). Am Handy gilt Antippen.
+function initDragAndDrop() {
+  $view.addEventListener('dragstart', (e) => {
+    const chipEl = e.target.closest('[data-chip-id]');
+    if (!chipEl) return;
+    const id = chipEl.dataset.chipId;
+    const ids = app.selected.has(id) ? [...app.selected] : [id];
+    e.dataTransfer.setData('text/plain', JSON.stringify(ids));
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  $view.addEventListener('dragover', (e) => {
+    const zone = e.target.closest('[data-drop-zone]');
+    if (!zone) return;
+    e.preventDefault();
+    zone.classList.add('over');
+  });
+  $view.addEventListener('dragleave', (e) => {
+    const zone = e.target.closest('[data-drop-zone]');
+    if (zone && !zone.contains(e.relatedTarget)) zone.classList.remove('over');
+  });
+  $view.addEventListener('drop', (e) => {
+    const zone = e.target.closest('[data-drop-zone]');
+    if (!zone) return;
+    e.preventDefault();
+    zone.classList.remove('over');
+    let ids;
+    try {
+      ids = JSON.parse(e.dataTransfer.getData('text/plain'));
+    } catch {
+      return;
+    }
+    run(() => dropOn(ids, JSON.parse(zone.dataset.dropZone)));
+  });
 }
 
 async function reload() {
@@ -68,13 +107,16 @@ function go(view) {
 
 function route() {
   const v = location.hash.slice(1);
-  app.view = ['lager', 'bambu', 'einstellungen'].includes(v) ? v : 'lager';
+  app.view = ['lager', 'plaetze', 'bambu', 'einstellungen'].includes(v) ? v : 'lager';
   document.querySelectorAll('.tab').forEach((t) => {
     if (t.dataset.view === app.view) t.setAttribute('aria-current', 'page');
     else t.removeAttribute('aria-current');
   });
   clearInterval(app.poll);
+  app.selected.clear();
+  document.body.classList.remove('has-movebar');
   if (app.view === 'lager') renderLager();
+  else if (app.view === 'plaetze') renderPlaces();
   else if (app.view === 'bambu') renderBambu();
   else renderSettings();
   if (app.backend.mode === 'server') {
@@ -88,6 +130,7 @@ async function poll() {
   try {
     await reload();
     if (app.view === 'lager') updateLager();
+    if (app.view === 'plaetze' && !app.selected.size) updatePlaces();
     if (app.view === 'bambu') {
       app.bambu = await app.backend.bambu();
       updatePrinters();
@@ -111,7 +154,11 @@ const SORTS = {
   rest: (s) => s.netWeight,
   brutto: (s) => grossOf(s, app.settings),
   kauf: (s) => s.purchaseWeight,
-  ort: (s) => s.location.toLowerCase() || '￿',
+  // AMS zuerst, dann Pakete in natürlicher Reihenfolge, "ohne Platz" zuletzt.
+  ort: (s) => {
+    const p = spoolPlace(s);
+    return { slot: '0 ' + p.slot, ams: '1', place: '2 ' + p.place.toLowerCase(), none: '3' }[p.kind];
+  },
 };
 
 function compare(a, b) {
@@ -195,19 +242,24 @@ function listHtml(list) {
     return `<div class="empty-state">Keine Spule passt zu Suche und Filter.
       <button class="btn small" type="button" data-action="reset-filter">Filter zurücksetzen</button></div>`;
   }
-  return `<div class="row head">${sortHead('farbe', 'Spule')}${sortHead('rest', 'Rest')}${sortHead('brutto', 'Mit Spule', 'r')}${sortHead('kauf', 'Kauf', 'r')}${sortHead('ort', 'Lagerort')}<span>Status</span><span></span></div>`
+  return `<div class="row head">${sortHead('farbe', 'Spule')}${sortHead('rest', 'Rest')}${sortHead('brutto', 'Mit Spule', 'r')}${sortHead('kauf', 'Kauf', 'r')}${sortHead('ort', 'Platz')}<span>Status</span><span></span></div>`
     + list.map(rowHtml).join('');
 }
 
 function statusPills(s) {
   const level = stockLevel(s, app.settings);
   return [
-    s.inAms ? `<span class="pill ams">AMS${s.bambu.slot ? ' ' + esc(s.bambu.slot) : ''}</span>` : '',
     level === 'neu' ? '<span class="pill new">Ungeöffnet</span>' : '',
     level === 'knapp' ? '<span class="pill knapp">Knapp</span>' : '',
     level === 'leer' ? '<span class="pill leer">Leer</span>' : '',
     s.bambu.cloudId ? '<span class="pill cloud" title="Mit dem Bambu Filament Manager verknüpft">Bambu</span>' : '',
   ].join('');
+}
+
+// Antippen öffnet die Platzwahl (Paket oder AMS-Slot).
+function placeButton(s) {
+  const p = spoolPlace(s);
+  return `<button type="button" class="place-btn ${p.kind}" data-action="place" data-id="${esc(s.id)}" title="Platz ändern">${esc(p.kind === 'none' ? 'Platz wählen' : p.label)}</button>`;
 }
 
 function rowHtml(s) {
@@ -219,8 +271,8 @@ function rowHtml(s) {
     <div class="c-rest rest"><span class="g num">${fmt(s.netWeight)} <small>g</small></span><div class="meter" data-level="${level}"><span style="width:${(share * 100).toFixed(1)}%"></span></div></div>
     <div class="c-gross r num" title="${esc(type.name)}, Tara ${fmt(type.tare)} g">${fmt(grossOf(s, app.settings))}</div>
     <div class="c-buy r num">${fmt(s.purchaseWeight)}</div>
-    <div class="c-loc loc">${s.location ? esc(s.location) : '<span class="muted">–</span>'}</div>
-    <div class="c-meta pills">${s.location ? `<span class="pill loc-m">Ort ${esc(s.location)}</span>` : ''}${statusPills(s)}</div>
+    <div class="c-loc">${placeButton(s)}</div>
+    <div class="c-meta pills"><span class="loc-m">${placeButton(s)}</span>${statusPills(s)}</div>
     <div class="c-actions"><button class="btn small" type="button" data-action="weigh" data-id="${esc(s.id)}">${icons.scale}Wiegen</button></div>
   </article>`;
 }
@@ -446,6 +498,203 @@ function confirmDialog(text, okLabel, danger = false) {
 }
 
 // ---------------------------------------------------------------------------
+// Plätze: Pakete und AMS-Slots
+
+function targetLabel(t) {
+  if (t.kind === 'slot') return 'AMS ' + t.slot;
+  if (t.kind === 'ams') return 'AMS';
+  if (t.kind === 'place') return placeName(t.place);
+  return 'ohne Platz';
+}
+
+const slotOccupant = (slot) => app.spools.find((s) => s.inAms && s.bambu.slot === slot);
+const shortName = (s) => s.colorName || s.colorHex;
+
+function nextPlaceName() {
+  const nums = placeList(app.settings, app.spools).filter((p) => /^\d+$/.test(p)).map(Number);
+  return String(nums.length ? Math.max(...nums) + 1 : 1);
+}
+
+// Verschiebt Spulen und meldet, wohin eine verdrängte Spule gewandert ist.
+async function moveSpools(ids, target) {
+  const moved = ids.map(findSpool).filter(Boolean);
+  const res = await app.backend.moveSpools(ids, target);
+  app.spools = res.spools;
+  let msg = moved.length === 1 ? `${shortName(moved[0])} liegt jetzt in ${targetLabel(target)}` : `${moved.length} Spulen liegen jetzt in ${targetLabel(target)}`;
+  if (res.swapped.length) {
+    const other = findSpool(res.swapped[0]);
+    msg += `, ${shortName(other)} dafür in ${spoolPlace(other).label}`;
+  }
+  toast(msg);
+}
+
+// Schnelle Platzwahl für eine Spule aus der Lagerliste.
+function placeDialog(spool) {
+  const cur = spoolPlace(spool);
+  const same = (t) => t.kind === cur.kind && (t.kind !== 'slot' || t.slot === cur.slot) && (t.kind !== 'place' || t.place === cur.place);
+  const pick = (t, label, sub) => `<button type="button" class="pick ${same(t) ? 'current' : ''}" data-target="${esc(JSON.stringify(t))}"><strong>${esc(label)}</strong><span>${sub}</span></button>`;
+  const slots = amsSlots(app.settings, app.spools).map((slot) => {
+    const occ = slotOccupant(slot);
+    let sub = 'frei';
+    if (occ && occ.id === spool.id) sub = 'hier';
+    else if (occ) sub = `${ring(occ.colorHex, remainingShare(occ))}${esc(shortName(occ))}`;
+    return pick({ kind: 'slot', slot }, slot, sub);
+  }).join('');
+  const places = placeList(app.settings, app.spools).map((p) => {
+    const n = app.spools.filter((s) => !s.inAms && s.location === p).length;
+    return pick({ kind: 'place', place: p }, placeName(p), `${n} ${n === 1 ? 'Spule' : 'Spulen'}`);
+  }).join('');
+  openDialog({
+    title: 'Platz wählen',
+    body: `
+      <div class="spool">${ring(spool.colorHex, remainingShare(spool))}<div class="txt"><div class="title">${esc(spoolLabel(spool))}</div><div class="sub">Jetzt: ${esc(cur.label)}</div></div></div>
+      <div class="pick-group"><h3>AMS</h3><div class="picks">${slots}${pick({ kind: 'ams' }, 'Im AMS', 'ohne Slot')}</div>
+        <p class="small muted">Ist der Slot belegt, tauschen die beiden Spulen den Platz.</p></div>
+      <div class="pick-group"><h3>Lager</h3><div class="picks">${places}${pick({ kind: 'none' }, 'Ohne Platz', 'nicht einsortiert')}</div></div>
+      <div class="pick-group"><h3>Neues Paket</h3><div class="new-place">
+        <input name="newPlace" value="${esc(nextPlaceName())}" aria-label="Name des neuen Pakets">
+        <button type="submit" class="btn">${icons.plus}Anlegen und hineinlegen</button></div></div>`,
+    foot: '<span class="spacer"></span><button type="button" class="btn" data-close>Schließen</button>',
+    onReady(dlg) {
+      dlg.querySelector('.dlg-body').addEventListener('click', (e) => {
+        const b = e.target.closest('[data-target]');
+        if (!b) return;
+        run(async () => {
+          await moveSpools([spool.id], JSON.parse(b.dataset.target));
+          dlg.close();
+          refreshView();
+        });
+      });
+    },
+    async onSubmit(form) {
+      const name = form.elements.newPlace.value.trim();
+      if (!name) throw new Error('Bitte einen Namen für das Paket angeben.');
+      app.settings = (await app.backend.places({ action: 'add', name })).settings;
+      await moveSpools([spool.id], { kind: 'place', place: name });
+      refreshView();
+    },
+  });
+}
+
+function renderPlaces() {
+  $view.innerHTML = `
+    <section class="places-intro">
+      <div><h2>Plätze</h2><p class="small muted">Spulen antippen, dann beim Paket oder AMS-Slot auf „Hierher“ tippen. Am Rechner geht auch Ziehen und Ablegen.</p></div>
+      <button class="btn" type="button" data-action="place-add">${icons.plus}Paket</button>
+    </section>
+    <div id="board"></div>
+    <div class="movebar" id="movebar" hidden></div>`;
+  updatePlaces();
+}
+
+function chipHtml(s) {
+  return `<button type="button" class="spool-chip" draggable="true" data-chip-id="${esc(s.id)}" aria-pressed="${app.selected.has(s.id)}">`
+    + `${ring(s.colorHex, remainingShare(s))}<span class="txt"><span class="name">${esc(shortName(s))}</span>`
+    + `<span class="meta">${esc(s.material)} · ${fmt(s.netWeight)} g</span></span></button>`;
+}
+
+function dropButton(target) {
+  if (!app.selected.size) return '';
+  return `<button type="button" class="btn small primary" data-drop="${esc(JSON.stringify(target))}">Hierher</button>`;
+}
+
+function updatePlaces() {
+  const board = document.getElementById('board');
+  if (!board) return;
+  for (const id of app.selected) if (!findSpool(id)) app.selected.delete(id);
+  const selecting = app.selected.size > 0;
+  const slotTiles = amsSlots(app.settings, app.spools).map((slot) => {
+    const occ = slotOccupant(slot);
+    const t = { kind: 'slot', slot };
+    return `<div class="slot-box ${occ ? '' : 'free'}" data-drop-zone="${esc(JSON.stringify(t))}">
+      <div class="box-head"><span class="slot-id">${esc(slot)}</span><span class="spacer"></span>${dropButton(t)}</div>
+      ${occ ? chipHtml(occ) : '<span class="small muted">frei</span>'}</div>`;
+  }).join('');
+  const loose = app.spools.filter((s) => s.inAms && !s.bambu.slot);
+  const inAms = app.spools.filter((s) => s.inAms).length;
+  const amsBox = `<section class="box">
+    <div class="box-head"><h3>AMS</h3><span class="small muted">${inAms} ${inAms === 1 ? 'Spule' : 'Spulen'}</span></div>
+    <div class="slot-grid">${slotTiles}</div>
+    <div class="sub-zone" data-drop-zone="${esc(JSON.stringify({ kind: 'ams' }))}">
+      <div class="box-head"><span class="small">Im AMS, Slot unbekannt</span><span class="spacer"></span>${dropButton({ kind: 'ams' })}</div>
+      <div class="chips-wrap">${loose.map(chipHtml).join('') || '<span class="small muted">keine</span>'}</div>
+    </div></section>`;
+  const placeBoxes = placeList(app.settings, app.spools).map((p) => {
+    const list = app.spools.filter((s) => !s.inAms && s.location === p);
+    const t = { kind: 'place', place: p };
+    return `<section class="box" data-drop-zone="${esc(JSON.stringify(t))}">
+      <div class="box-head"><h3>${esc(placeName(p))}</h3><span class="small muted">${list.length} · ${fmtKg(list.reduce((a, s) => a + s.netWeight, 0))} kg</span>
+        <span class="spacer"></span>${dropButton(t)}
+        <button type="button" class="icon-btn" data-action="place-edit" data-place="${esc(p)}" aria-label="${esc(placeName(p))} umbenennen">${icons.edit}</button></div>
+      <div class="chips-wrap">${list.map(chipHtml).join('') || '<span class="small muted">leer</span>'}</div></section>`;
+  }).join('');
+  const none = app.spools.filter((s) => !s.inAms && !s.location);
+  const noneBox = none.length || selecting ? `<section class="box" data-drop-zone="${esc(JSON.stringify({ kind: 'none' }))}">
+      <div class="box-head"><h3>Ohne Platz</h3><span class="small muted">${none.length}</span><span class="spacer"></span>${dropButton({ kind: 'none' })}</div>
+      <div class="chips-wrap">${none.map(chipHtml).join('') || '<span class="small muted">leer</span>'}</div></section>` : '';
+  board.innerHTML = `${amsBox}<div class="boxes">${placeBoxes}${noneBox}</div>`;
+  board.classList.toggle('selecting', selecting);
+  const bar = document.getElementById('movebar');
+  bar.hidden = !selecting;
+  document.body.classList.toggle('has-movebar', selecting);
+  bar.innerHTML = selecting ? `<div class="wrap movebar-in"><span><strong>${app.selected.size}</strong> ${app.selected.size === 1 ? 'Spule' : 'Spulen'} ausgewählt. Jetzt beim Ziel auf „Hierher“ tippen.</span>
+    <button class="btn small" type="button" data-action="select-clear">Auswahl aufheben</button></div>` : '';
+}
+
+async function dropOn(ids, target) {
+  await moveSpools(ids, target);
+  app.selected.clear();
+  updatePlaces();
+}
+
+function placeAddDialog() {
+  const n = app.selected.size;
+  openDialog({
+    title: 'Neues Paket',
+    body: `<label class="field"><span>Name oder Nummer</span><input name="name" value="${esc(nextPlaceName())}" required></label>
+      <p class="small muted">Eine reine Zahl wird als „Paket 7“ angezeigt.${n ? ` Die ${n} ausgewählten Spulen kommen direkt hinein.` : ''}</p>`,
+    foot: '<button type="button" class="btn" data-close>Abbrechen</button><span class="spacer"></span><button type="submit" class="btn primary">Anlegen</button>',
+    async onSubmit(form) {
+      const name = form.elements.name.value.trim();
+      app.settings = (await app.backend.places({ action: 'add', name })).settings;
+      if (app.selected.size) await dropOn([...app.selected], { kind: 'place', place: name });
+      else {
+        updatePlaces();
+        toast(`${placeName(name)} angelegt`);
+      }
+    },
+  });
+}
+
+function placeEditDialog(place) {
+  const count = app.spools.filter((s) => !s.inAms && s.location === place).length;
+  openDialog({
+    title: esc(placeName(place)),
+    body: `<label class="field"><span>Name oder Nummer</span><input name="name" value="${esc(place)}" required></label>
+      <p class="small muted">Heißt schon ein anderes Paket so, werden beide zusammengelegt.${count ? '' : ' Das Paket ist leer und kann entfernt werden.'}</p>`,
+    foot: `${count ? '' : `<button type="button" class="btn danger" data-remove>${icons.trash}Entfernen</button>`}<span class="spacer"></span>
+      <button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Speichern</button>`,
+    onReady(dlg) {
+      dlg.querySelector('[data-remove]')?.addEventListener('click', () => run(async () => {
+        const res = await app.backend.places({ action: 'remove', name: place });
+        Object.assign(app, { settings: res.settings, spools: res.spools });
+        dlg.close();
+        updatePlaces();
+        toast(`${placeName(place)} entfernt`);
+      }));
+    },
+    async onSubmit(form) {
+      const to = form.elements.name.value.trim();
+      if (to === place) return;
+      const res = await app.backend.places({ action: 'rename', name: place, to });
+      Object.assign(app, { settings: res.settings, spools: res.spools });
+      updatePlaces();
+      toast(`Umbenannt in ${placeName(to)}`);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // AMS & Bambu
 
 function renderBambu() {
@@ -514,14 +763,19 @@ function updateCloud() {
     ${c.lastError ? `<div class="note crit">${esc(c.lastError)}</div>` : ''}
     <form class="fields" data-form="login">
       <label class="field full"><span>E-Mail des Bambu-Kontos</span><input name="account" type="email" autocomplete="username" required></label>
-      <label class="field full"><span>Passwort</span><input name="password" type="password" autocomplete="current-password" required></label>
+      <label class="field full"><span>Passwort (optional)</span><input name="password" type="password" autocomplete="current-password">
+        <small class="muted">Leer lassen, wenn du dich bei Bambu mit Google oder Apple anmeldest. Dann schickt Bambu einen Code an diese E-Mail-Adresse.</small></label>
       <label class="field"><span>Region</span>${regionSelect(c.region)}</label>
       <div class="actions full"><button class="btn primary" type="submit">Mit Bambu verbinden</button></div>
     </form>
-    <p class="small muted">Das Passwort wird nicht gespeichert, nur der Anmelde-Token von Bambu (in <code>data/lager.json</code> auf diesem Rechner).</p>
+    <p class="small muted">Gespeichert wird nur der Anmelde-Token von Bambu (in <code>data/lager.json</code> auf diesem Rechner), nie das Passwort.</p>
     <details><summary>Token von Hand eintragen</summary>
       <form class="fields" data-form="token">
-        <p class="full small muted">Falls die Anmeldung blockiert wird: auf bambulab.com einloggen und in den Entwicklertools des Browsers unter Cookies den Wert <code>token</code> kopieren.</p>
+        <ol class="steps full small">
+          <li>In Chrome <code>bambulab.com</code> öffnen und wie gewohnt anmelden, auch mit Google.</li>
+          <li>Entwicklertools öffnen (Mac: <kbd>⌥ ⌘ I</kbd>), Reiter „Application“, links „Cookies“ und dann <code>https://bambulab.com</code>.</li>
+          <li>Den Wert in der Zeile <code>token</code> kopieren und hier einfügen.</li>
+        </ol>
         <label class="field full"><span>Token</span><input name="token" autocomplete="off" required></label>
         <label class="field"><span>Region</span>${regionSelect(c.region)}</label>
         <div class="actions full"><button class="btn" type="submit">Token speichern</button></div>
@@ -700,12 +954,13 @@ function renderSettings() {
   const server = app.backend.mode === 'server';
   $view.innerHTML = `<section class="grid-2">
     <div class="panel">
-      <div class="panel-head"><h2>Spulenarten und Tara</h2><p>Leergewicht der Spule, wird beim Wiegen abgezogen</p></div>
+      <div class="panel-head"><h2>Spulen und AMS</h2><p>Tara ist das Leergewicht der Spule und wird beim Wiegen abgezogen</p></div>
       <form data-form="settings" class="types">
         <div class="type-row small muted"><span>Name</span><span>Tara in g</span><span></span></div>
         <div class="types" data-types>${app.settings.spoolTypes.map(typeRow).join('')}</div>
         <div class="actions"><button type="button" class="btn small" data-action="type-add">${icons.plus}Spulenart</button></div>
         <label class="field"><span>Als knapp markieren unter (g)</span><input name="lowStock" type="number" inputmode="numeric" min="0" step="1" value="${app.settings.lowStock}"></label>
+        <label class="field"><span>Anzahl AMS-Einheiten (je 4 Slots)</span><select name="amsUnits">${[1, 2, 3, 4].map((n) => `<option value="${n}" ${n === app.settings.amsUnits ? 'selected' : ''}>${n} (${n === 1 ? 'A1–A4' : 'A1–' + String.fromCharCode(64 + n) + '4'})</option>`).join('')}</select></label>
         <div class="actions"><button class="btn primary" type="submit">Speichern</button></div>
       </form>
       <p class="small muted">Tara bestimmen: eine leere Spule wiegen und den Wert eintragen. In der Excel-Tabelle stand für die Bambu-Plastikspule 274 g.</p>
@@ -738,6 +993,7 @@ function renderSettings() {
 
 function refreshView() {
   if (app.view === 'lager') updateLager();
+  else if (app.view === 'plaetze') updatePlaces();
   else if (app.view === 'bambu' && app.bambu) updatePrinters(true);
 }
 
@@ -751,6 +1007,13 @@ async function run(fn) {
 
 const actions = {
   add: () => spoolDialog(null),
+  place: (el) => placeDialog(findSpool(el.dataset.id)),
+  'place-add': () => placeAddDialog(),
+  'place-edit': (el) => placeEditDialog(el.dataset.place),
+  'select-clear': () => {
+    app.selected.clear();
+    updatePlaces();
+  },
   weigh: (el) => weighDialog(findSpool(el.dataset.id)),
   'reset-filter': () => {
     Object.assign(prefs, { q: '', chip: 'alle', material: '' });
@@ -808,6 +1071,19 @@ function onClick(e) {
   const a = e.target.closest('[data-action]');
   if (a && actions[a.dataset.action]) {
     actions[a.dataset.action](a, e);
+    return;
+  }
+  const chipEl = e.target.closest('[data-chip-id]');
+  if (chipEl) {
+    const id = chipEl.dataset.chipId;
+    if (app.selected.has(id)) app.selected.delete(id);
+    else app.selected.add(id);
+    updatePlaces();
+    return;
+  }
+  const drop = e.target.closest('[data-drop]');
+  if (drop) {
+    run(() => dropOn([...app.selected], JSON.parse(drop.dataset.drop)));
     return;
   }
   const sort = e.target.closest('[data-sort]');
@@ -894,7 +1170,9 @@ const forms = {
       name: r.querySelector('[name="typeName"]').value,
       tare: r.querySelector('[name="typeTare"]').value,
     }));
-    app.settings = await app.backend.saveSettings({ spoolTypes, lowStock: f.lowStock.value });
+    app.settings = await app.backend.saveSettings({
+      ...app.settings, spoolTypes, lowStock: f.lowStock.value, amsUnits: f.amsUnits.value,
+    });
     renderSettings();
     toast('Einstellungen gespeichert');
   },

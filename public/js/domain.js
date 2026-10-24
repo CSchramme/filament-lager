@@ -65,6 +65,8 @@ export function defaultSettings() {
       { id: 'pappe', name: 'Pappe', tare: 0 },
     ],
     lowStock: 150,
+    amsUnits: 1,
+    places: [],
   };
 }
 
@@ -162,9 +164,12 @@ export function normalizeSettings(input) {
   const spoolTypes = (Array.isArray(src.spoolTypes) ? src.spoolTypes : base.spoolTypes)
     .map((t) => ({ id: str(t && t.id) || newId(), name: str(t && t.name), tare: Math.max(0, toInt(t && t.tare, 0)) }))
     .filter((t) => t.name && !seen.has(t.id) && seen.add(t.id));
+  const places = [...new Set((Array.isArray(src.places) ? src.places : []).map(str).filter(Boolean))];
   return {
     spoolTypes: spoolTypes.length ? spoolTypes : base.spoolTypes,
     lowStock: Math.max(0, toInt(src.lowStock, base.lowStock)),
+    amsUnits: Math.min(4, Math.max(1, toInt(src.amsUnits, base.amsUnits))),
+    places,
   };
 }
 
@@ -247,6 +252,106 @@ export function normalizeSpool(input, { base = null, now = new Date().toISOStrin
     createdAt: str(src.createdAt) || now,
     updatedAt: keepTimestamps && src.updatedAt ? str(src.updatedAt) : now,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Plätze: Pakete/Kisten im Lager und Slots im AMS
+
+// "3" -> "Paket 3", alles andere bleibt wie eingegeben.
+export function placeName(place) {
+  const s = str(place);
+  return /^\d+$/.test(s) ? 'Paket ' + s : s;
+}
+
+// Wo liegt die Spule? { kind: 'slot' | 'ams' | 'place' | 'none', label }
+export function spoolPlace(spool) {
+  if (spool.inAms && spool.bambu.slot) return { kind: 'slot', slot: spool.bambu.slot, label: 'AMS ' + spool.bambu.slot };
+  if (spool.inAms) return { kind: 'ams', label: 'AMS' };
+  if (spool.location) return { kind: 'place', place: spool.location, label: placeName(spool.location) };
+  return { kind: 'none', label: 'Ohne Platz' };
+}
+
+function placeOrder(a, b) {
+  const na = /^\d+$/.test(a);
+  const nb = /^\d+$/.test(b);
+  if (na !== nb) return na ? -1 : 1;
+  return na ? Number(a) - Number(b) : a.localeCompare(b, 'de', { numeric: true });
+}
+
+// Alle Pakete: die gespeicherte Reihenfolge, dann weitere aus dem Bestand.
+export function placeList(settings, spools) {
+  const known = settings.places || [];
+  const extra = [...new Set(spools.map((s) => s.location).filter((l) => l && !known.includes(l)))].sort(placeOrder);
+  return [...known, ...extra];
+}
+
+// Slots A1–A4 je AMS-Einheit, dazu Slots, die Spulen schon belegen (z. B. vom Drucker).
+export function amsSlots(settings, spools = []) {
+  const slots = [];
+  for (let u = 0; u < (settings.amsUnits || 1); u += 1) {
+    for (let t = 1; t <= 4; t += 1) slots.push(String.fromCharCode(65 + u) + t);
+  }
+  for (const s of spools) if (s.inAms && s.bambu.slot && !slots.includes(s.bambu.slot)) slots.push(s.bambu.slot);
+  return slots;
+}
+
+const OUT_OF_AMS = { inAms: false, bambu: { slot: '', printerId: '', slotColor: '' } };
+
+function patchFor(target) {
+  if (target.kind === 'slot') return { inAms: true, opened: true, location: '', bambu: { slot: str(target.slot), printerId: '', slotColor: '' } };
+  if (target.kind === 'ams') return { inAms: true, opened: true, location: '', bambu: { slot: '', printerId: '', slotColor: '' } };
+  if (target.kind === 'place') return { ...OUT_OF_AMS, location: str(target.place) };
+  return { ...OUT_OF_AMS, location: '' };
+}
+
+function targetOf(spool) {
+  const p = spoolPlace(spool);
+  return p.kind === 'place' ? { kind: 'place', place: p.place } : p.kind === 'slot' ? { kind: 'slot', slot: p.slot } : { kind: p.kind };
+}
+
+// Legt Spulen an einen neuen Platz. Liegt in einem AMS-Slot schon eine
+// andere Spule, tauscht sie den Platz mit der neuen (wie beim echten Wechsel).
+// Ergebnis: [{ id, patch }] für normalizeSpool(patch, { base }).
+export function planMove(spools, ids, target) {
+  if (!target || !['slot', 'ams', 'place', 'none'].includes(target.kind)) throw new Error('Unbekanntes Ziel.');
+  if (target.kind === 'place' && !str(target.place)) throw new Error('Bitte ein Paket angeben.');
+  if (target.kind === 'slot' && !str(target.slot)) throw new Error('Bitte einen AMS-Slot angeben.');
+  const moving = ids.map((id) => spools.find((s) => s.id === id)).filter(Boolean);
+  if (!moving.length) throw new Error('Spule nicht gefunden.');
+  if (target.kind === 'slot' && moving.length > 1) throw new Error('In einen AMS-Slot passt nur eine Spule.');
+  const changes = moving.map((s) => ({ id: s.id, patch: patchFor(target) }));
+  if (target.kind === 'slot') {
+    const occupant = spools.find((s) => s.inAms && s.bambu.slot === target.slot && s.id !== moving[0].id);
+    if (occupant) changes.push({ id: occupant.id, patch: patchFor(targetOf(moving[0])), swapped: true });
+  }
+  return changes;
+}
+
+// Pakete anlegen, umbenennen, entfernen. Ergebnis: neue Paketliste und
+// Änderungen an Spulen. Umbenennen auf ein vorhandenes Paket legt beide zusammen.
+export function planPlaces(settings, spools, { action, name, to }) {
+  const list = placeList(settings, spools);
+  const n = str(name);
+  if (action === 'add') {
+    if (!n) throw new Error('Bitte einen Namen für das Paket angeben.');
+    return { places: list.includes(n) ? list : [...list, n], changes: [] };
+  }
+  if (action === 'rename') {
+    const t = str(to);
+    if (!t) throw new Error('Bitte einen Namen für das Paket angeben.');
+    return {
+      places: list.includes(t) ? list.filter((p) => p !== n) : list.map((p) => (p === n ? t : p)),
+      changes: spools.filter((s) => s.location === n).map((s) => ({ id: s.id, patch: { location: t } })),
+    };
+  }
+  if (action === 'remove') {
+    if (spools.some((s) => s.location === n && !s.inAms)) throw new Error('Das Paket ist nicht leer.');
+    return {
+      places: list.filter((p) => p !== n),
+      changes: spools.filter((s) => s.location === n).map((s) => ({ id: s.id, patch: { location: '' } })),
+    };
+  }
+  throw new Error('Unbekannte Aktion.');
 }
 
 export function spoolLabel(spool) {

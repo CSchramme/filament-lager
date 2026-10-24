@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import {
-  colorNameFor, newId, normalizeSettings, normalizeSpool,
+  colorNameFor, newId, normalizeSettings, normalizeSpool, planMove, planPlaces,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import { accountFromToken, BambuCloud, CloudError } from './bambu/cloud.js';
@@ -60,11 +60,15 @@ export function createApp({ store, printers, publicDir, password = '', cloudFact
   function applyAmsChanges() {
     if (!printers || !store.bambu.options.autoAms) return false;
     const changes = reconcileAms(store.spools, printers.liveSlots(), { amsWeights: store.bambu.options.amsWeights });
+    applyChanges(changes);
+    return changes.length > 0;
+  }
+
+  function applyChanges(changes) {
     for (const { id, patch } of changes) {
       const idx = store.spools.findIndex((s) => s.id === id);
-      store.spools[idx] = normalizeSpool(patch, { base: store.spools[idx] });
+      if (idx >= 0) store.spools[idx] = normalizeSpool(patch, { base: store.spools[idx] });
     }
-    return changes.length > 0;
   }
 
   if (printers) {
@@ -145,6 +149,7 @@ export function createApp({ store, printers, publicDir, password = '', cloudFact
   app.post('/api/import', async (req, res) => {
     const { mode = 'append', spools = [], settings } = req.body || {};
     if (settings) store.data.settings = normalizeSettings(settings);
+    else if (mode !== 'append') store.data.settings.places = [];
     if (mode === 'seed') {
       store.data.spools = seedSpools();
     } else {
@@ -157,16 +162,51 @@ export function createApp({ store, printers, publicDir, password = '', cloudFact
     res.json({ spools: store.spools, settings: store.settings });
   });
 
+  // Legt Spulen in ein Paket, einen AMS-Slot, "AMS ohne Slot" oder "ohne Platz".
+  app.post('/api/spools/move', async (req, res) => {
+    const { ids = [], target } = req.body || {};
+    let changes;
+    try {
+      changes = planMove(store.spools, Array.isArray(ids) ? ids : [], target);
+    } catch (err) {
+      throw new HttpError(400, err.message);
+    }
+    applyChanges(changes);
+    await store.save();
+    res.json({ spools: store.spools, swapped: changes.filter((c) => c.swapped).map((c) => c.id) });
+  });
+
+  // Pakete anlegen, umbenennen oder entfernen.
+  app.post('/api/places', async (req, res) => {
+    let plan;
+    try {
+      plan = planPlaces(store.settings, store.spools, req.body || {});
+    } catch (err) {
+      throw new HttpError(400, err.message);
+    }
+    store.data.settings = normalizeSettings({ ...store.settings, places: plan.places });
+    applyChanges(plan.changes);
+    await store.save();
+    res.json({ spools: store.spools, settings: store.settings });
+  });
+
   // -- Bambu Cloud ----------------------------------------------------------
 
   app.get('/api/bambu', (req, res) => res.json(bambuView()));
 
   app.post('/api/bambu/cloud/login', async (req, res) => {
     const { account = '', password: pw = '', region = 'global' } = req.body || {};
-    if (!account.trim() || !pw) throw new HttpError(400, 'Bitte E-Mail und Passwort eingeben.');
+    if (!String(account).trim()) throw new HttpError(400, 'Bitte die E-Mail-Adresse des Bambu-Kontos eingeben.');
     const client = cloudFactory({ region, token: '' });
     try {
-      const result = await client.login(account.trim(), pw);
+      let result;
+      if (pw) {
+        result = await client.login(account.trim(), pw);
+      } else {
+        // Ohne Passwort (z. B. Konto über Google oder Apple) per E-Mail-Code anmelden.
+        await client.sendCode(account.trim());
+        result = { status: 'code' };
+      }
       if (result.status === 'ok') {
         await finishLogin(result, account.trim(), region);
       } else {
@@ -181,7 +221,7 @@ export function createApp({ store, printers, publicDir, password = '', cloudFact
 
   app.post('/api/bambu/cloud/code', async (req, res) => {
     const code = String((req.body || {}).code || '').trim();
-    if (!pendingLogin) throw new HttpError(409, 'Keine Anmeldung offen. Bitte zuerst E-Mail und Passwort eingeben.');
+    if (!pendingLogin) throw new HttpError(409, 'Keine Anmeldung offen. Bitte zuerst die E-Mail-Adresse eingeben.');
     if (!code) throw new HttpError(400, 'Bitte den Code eingeben.');
     const client = cloudFactory({ region: pendingLogin.region, token: '' });
     try {

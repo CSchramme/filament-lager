@@ -100,3 +100,55 @@ test('Einstellungen werden bereinigt', () => {
   assert.equal(s.lowStock, 200);
   assert.equal(normalizeSettings({ spoolTypes: [] }).spoolTypes.length, 2);
 });
+
+test('Pakete und AMS-Slots: Liste und Reihenfolge', async () => {
+  const { amsSlots, placeList, placeName, spoolPlace } = await import('../public/js/domain.js');
+  const spools = seedSpools();
+  assert.deepEqual(placeList(settings, spools), ['1', '2', '3', '4', '5', '6', '1k', '2k', 'Kiste']);
+  assert.deepEqual(placeList({ ...settings, places: ['Regal'] }, spools).slice(0, 2), ['Regal', '1']);
+  assert.equal(placeName('3'), 'Paket 3');
+  assert.equal(placeName('Kiste'), 'Kiste');
+  assert.deepEqual(amsSlots({ ...settings, amsUnits: 2 }).slice(-2), ['B3', 'B4']);
+  assert.deepEqual(spoolPlace(spools[0]), { kind: 'place', place: '1', label: 'Paket 1' });
+  assert.equal(spoolPlace(spools.find((s) => s.inAms)).kind, 'ams');
+});
+
+test('Spule in Paket oder AMS-Slot legen, belegter Slot wird getauscht', async () => {
+  const { planMove } = await import('../public/js/domain.js');
+  const apply = (spools, changes) => spools.map((s) => {
+    const c = changes.find((x) => x.id === s.id);
+    return c ? normalizeSpool(c.patch, { base: s }) : s;
+  });
+  let spools = seedSpools();
+  const orange = spools[0]; // Paket 1
+  const kuerbis = spools[4]; // Paket 5, ungeöffnet
+  spools = apply(spools, planMove(spools, [orange.id], { kind: 'slot', slot: 'A1' }));
+  let o = spools.find((s) => s.id === orange.id);
+  assert.deepEqual([o.inAms, o.bambu.slot, o.location], [true, 'A1', '']);
+  // Kürbis Orange in A1: Orange wandert zurück nach Paket 5
+  const changes = planMove(spools, [kuerbis.id], { kind: 'slot', slot: 'A1' });
+  assert.equal(changes.filter((c) => c.swapped).length, 1);
+  spools = apply(spools, changes);
+  o = spools.find((s) => s.id === orange.id);
+  const k = spools.find((s) => s.id === kuerbis.id);
+  assert.deepEqual([k.inAms, k.bambu.slot, k.opened], [true, 'A1', true]);
+  assert.deepEqual([o.inAms, o.bambu.slot, o.location], [false, '', '5']);
+  // Mehrere Spulen in ein Paket
+  spools = apply(spools, planMove(spools, [k.id, spools[1].id], { kind: 'place', place: 'Kiste' }));
+  assert.deepEqual(spools.filter((s) => [k.id, spools[1].id].includes(s.id)).map((s) => [s.inAms, s.location]), [[false, 'Kiste'], [false, 'Kiste']]);
+  assert.throws(() => planMove(spools, [k.id, o.id], { kind: 'slot', slot: 'A2' }), /nur eine Spule/);
+  assert.throws(() => planMove(spools, ['gibtsnicht'], { kind: 'none' }), /nicht gefunden/);
+});
+
+test('Pakete anlegen, umbenennen, zusammenlegen, entfernen', async () => {
+  const { planPlaces } = await import('../public/js/domain.js');
+  const spools = seedSpools();
+  assert.deepEqual(planPlaces(settings, spools, { action: 'add', name: '7' }).places.slice(-1), ['7']);
+  const ren = planPlaces(settings, spools, { action: 'rename', name: '1k', to: 'Kiste 1' });
+  assert.ok(ren.places.includes('Kiste 1') && !ren.places.includes('1k'));
+  assert.equal(ren.changes.length, 1);
+  const merge = planPlaces(settings, spools, { action: 'rename', name: '2k', to: 'Kiste' });
+  assert.ok(!merge.places.includes('2k'));
+  assert.throws(() => planPlaces(settings, spools, { action: 'remove', name: 'Kiste' }), /nicht leer/);
+  assert.ok(!planPlaces({ ...settings, places: ['9'] }, spools, { action: 'remove', name: '9' }).places.includes('9'));
+});

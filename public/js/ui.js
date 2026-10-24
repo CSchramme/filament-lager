@@ -17,6 +17,7 @@ export const icons = {
   trash: svg('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'),
   link: svg('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>'),
   file: svg('<path d="M14 3H6v18h12V7l-4-4z"/><path d="M14 3v4h4"/>'),
+  edit: svg('<path d="M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4"/>'),
 };
 
 const nf = new Intl.NumberFormat('de-DE');

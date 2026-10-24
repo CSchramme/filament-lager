@@ -24,6 +24,11 @@ class FakeCloud {
     return { status: 'code' };
   }
 
+  async sendCode(account) {
+    cloudDb.codesSent = (cloudDb.codesSent || 0) + 1;
+    this.lastCodeFor = account;
+  }
+
   async loginWithCode(account, code) {
     if (code !== '111111') throw new CloudError('Der Code ist falsch.', 400, 'code-wrong');
     return { status: 'ok', token: 'TOKEN-1' };
@@ -196,4 +201,38 @@ test('Import ersetzt oder ergänzt den Bestand', async () => {
   assert.equal(rep.body.spools.length, 1);
   const seed = await call('POST', '/api/import', { mode: 'seed' });
   assert.equal(seed.body.spools.length, 18);
+});
+
+test('Anmeldung ohne Passwort (Google-Konto) per E-Mail-Code', async () => {
+  await call('POST', '/api/bambu/cloud/logout', {});
+  const step1 = await call('POST', '/api/bambu/cloud/login', { account: 'google@example.org', password: '' });
+  assert.equal(step1.status, 200);
+  assert.deepEqual(step1.body.cloud.pending, { status: 'code', account: 'google@example.org' });
+  assert.equal(cloudDb.codesSent, 1);
+  const step2 = await call('POST', '/api/bambu/cloud/code', { code: '111111' });
+  assert.equal(step2.body.cloud.connected, true);
+  assert.equal((await call('POST', '/api/bambu/cloud/login', { account: '', password: '' })).status, 400);
+});
+
+test('Spulen verschieben und Pakete verwalten', async () => {
+  await call('POST', '/api/import', { mode: 'seed' });
+  const { spools } = (await call('GET', '/api/state')).body;
+  const orange = spools[0];
+  const moved = await call('POST', '/api/spools/move', { ids: [orange.id], target: { kind: 'slot', slot: 'A2' } });
+  assert.equal(moved.status, 200);
+  const o = moved.body.spools.find((s) => s.id === orange.id);
+  assert.deepEqual([o.inAms, o.bambu.slot, o.location], [true, 'A2', '']);
+  // Paket 1 ist jetzt leer, bleibt aber erhalten
+  assert.ok((await call('GET', '/api/state')).body.settings.places.includes('1'));
+  assert.equal((await call('POST', '/api/spools/move', { ids: [orange.id], target: { kind: 'paket' } })).status, 400);
+
+  const added = await call('POST', '/api/places', { action: 'add', name: '7' });
+  assert.ok(added.body.settings.places.includes('7'));
+  const back = await call('POST', '/api/spools/move', { ids: [orange.id], target: { kind: 'place', place: '7' } });
+  assert.equal(back.body.spools.find((s) => s.id === orange.id).location, '7');
+  const renamed = await call('POST', '/api/places', { action: 'rename', name: '7', to: 'Regal' });
+  assert.equal(renamed.body.spools.find((s) => s.id === orange.id).location, 'Regal');
+  assert.equal((await call('POST', '/api/places', { action: 'remove', name: 'Regal' })).status, 400);
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'lager.json'), 'utf8'));
+  assert.ok(saved.settings.places.includes('Regal'));
 });

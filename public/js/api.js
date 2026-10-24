@@ -1,7 +1,9 @@
 // Datenzugriff der Oberfläche. Läuft die Seite über den Node-Server, gehen
 // alle Änderungen dorthin. Ohne Server (z. B. als statische Seite) speichert
 // das Lager im Browser; die Bambu-Anbindung ist dann nicht verfügbar.
-import { newId, normalizeSettings, normalizeSpool } from './domain.js';
+import {
+  newId, normalizeSettings, normalizeSpool, placeList, planMove, planPlaces,
+} from './domain.js';
 import { seedSpools } from './seed.js';
 
 class ServerBackend {
@@ -32,6 +34,8 @@ class ServerBackend {
   deleteSpool(id) { return this.req('DELETE', 'api/spools/' + encodeURIComponent(id)); }
   saveSettings(settings) { return this.req('PUT', 'api/settings', settings).then((d) => d.settings); }
   importData(mode, spools, settings) { return this.req('POST', 'api/import', { mode, spools, settings }); }
+  moveSpools(ids, target) { return this.req('POST', 'api/spools/move', { ids, target }); }
+  places(action) { return this.req('POST', 'api/places', action); }
 
   // Bambu
   bambu() { return this.req('GET', 'api/bambu'); }
@@ -71,6 +75,8 @@ class LocalBackend {
   }
 
   write(data) {
+    // Pakete dauerhaft merken, damit ein leeres Paket nicht verschwindet.
+    data.settings.places = placeList(data.settings, data.spools);
     this.memory = data;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -82,10 +88,12 @@ class LocalBackend {
   load() {
     const raw = this.read();
     if (raw) {
-      return {
+      const data = {
         settings: normalizeSettings(raw.settings),
         spools: (raw.spools || []).map((s) => normalizeSpool(s, { keepTimestamps: true })),
       };
+      data.settings.places = placeList(data.settings, data.spools);
+      return data;
     }
     const data = { settings: normalizeSettings(), spools: seedSpools() };
     this.write(data);
@@ -127,9 +135,34 @@ class LocalBackend {
     return data.settings;
   }
 
+  applyChanges(data, changes) {
+    for (const { id, patch } of changes) {
+      const idx = data.spools.findIndex((s) => s.id === id);
+      if (idx >= 0) data.spools[idx] = normalizeSpool(patch, { base: data.spools[idx] });
+    }
+  }
+
+  async moveSpools(ids, target) {
+    const data = this.load();
+    const changes = planMove(data.spools, ids, target);
+    this.applyChanges(data, changes);
+    this.write(data);
+    return { spools: data.spools, swapped: changes.filter((c) => c.swapped).map((c) => c.id) };
+  }
+
+  async places(action) {
+    const data = this.load();
+    const plan = planPlaces(data.settings, data.spools, action);
+    data.settings = normalizeSettings({ ...data.settings, places: plan.places });
+    this.applyChanges(data, plan.changes);
+    this.write(data);
+    return data;
+  }
+
   async importData(mode, spools = [], settings) {
     const data = this.load();
     if (settings) data.settings = normalizeSettings(settings);
+    else if (mode !== 'append') data.settings.places = [];
     if (mode === 'seed') {
       data.spools = seedSpools();
     } else {

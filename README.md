@@ -13,6 +13,12 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
   wie viel seit dem letzten Wiegen verbraucht wurde.
 - **Übersicht**: Filament gesamt, Spulen im AMS, knappe Spulen (Grenze einstellbar), ungeöffnete
   Reserve, Menge je Material.
+- **Plätze**: zeigt jedes Paket und jeden AMS-Slot mit den Spulen darin. Spulen antippen und beim
+  Ziel auf „Hierher“ tippen, am Rechner auch per Ziehen und Ablegen. Mehrere Spulen gehen auf einmal.
+  Ist ein AMS-Slot belegt, tauschen die Spulen den Platz. Pakete lassen sich anlegen, umbenennen
+  und entfernen; eine reine Zahl wird als „Paket 3“ angezeigt.
+- In der Lagerliste öffnet der Platz-Knopf jeder Spule eine Schnellauswahl (AMS-Slot, AMS ohne
+  Slot, Paket, neues Paket).
 - Suchen, filtern (im AMS, geöffnet, ungeöffnet, knapp) und sortieren.
 - Spulen anlegen (auch mehrere gleiche auf einmal), bearbeiten, duplizieren, löschen.
 - **Import/Export**: CSV im Excel-Format (Semikolon, deutsche Spaltennamen) und JSON-Sicherung.
@@ -21,7 +27,7 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
   Material, Farbe, Kaufgewicht) einander zugeordnet. Optional werden die Restgewichte alle
   15 Minuten von Bambu übernommen.
 - **AMS live** über das Heimnetz: Farbe, Material und Füllstand jedes Slots, Luftfeuchte,
-  laufender Druck. „Im AMS“ wird automatisch gesetzt (RFID-Spulen oder von Hand zugeordnete
+  laufender Druck. „Im AMS“ und der Slot werden automatisch gesetzt (RFID-Spulen oder von Hand zugeordnete
   Slots), Slots lassen sich Lagerspulen zuordnen oder als neue Spule anlegen.
 
 Der Startbestand sind die 18 Spulen aus der Excel-Tabelle.
@@ -63,9 +69,12 @@ Die Daten landen im Ordner `data/` neben der `docker-compose.yml`.
 
 ## Bambu Filament Manager verbinden
 
-1. In der App auf **AMS & Bambu** gehen.
-2. Unter „Bambu Filament Manager“ E-Mail und Passwort des Bambu-Kontos eingeben.
-3. Bambu schickt meist einen Bestätigungscode per E-Mail. Den Code eingeben.
+1. In der App auf **Bambu** gehen.
+2. Unter „Bambu Filament Manager“ die E-Mail-Adresse des Bambu-Kontos eingeben.
+   - Mit Passwort: Passwort dazu eingeben. Bambu schickt meist zusätzlich einen Code per E-Mail.
+   - **Konto mit Google oder Apple angelegt:** Passwort leer lassen. Bambu schickt dann einen
+     Anmeldecode an die E-Mail-Adresse (bei Google die Gmail-Adresse).
+3. Den Code eingeben.
 4. **Von Bambu holen**: zeigt, welche Spulen aus dem Filament Manager neu ins Lager kommen,
    welche zugeordnet werden und wo sich Restgewichte geändert haben. Auswählen, übernehmen.
 5. **Nach Bambu senden**: legt Lagerspulen im Filament Manager an oder aktualisiert sie
@@ -74,9 +83,15 @@ Die Daten landen im Ordner `data/` neben der `docker-compose.yml`.
 Das Passwort wird nicht gespeichert, nur der Anmelde-Token (in `data/lager.json`, gilt etwa
 drei Monate). Gelöscht wird bei der Synchronisierung nichts, weder im Lager noch bei Bambu.
 
-Falls die Anmeldung blockiert wird, kann der Token auch von Hand eingetragen werden: auf
-bambulab.com einloggen und in den Entwicklertools des Browsers unter Cookies den Wert `token`
-kopieren.
+Falls der Code nicht ankommt oder die Anmeldung blockiert wird, geht es auch über den Token:
+
+1. In Chrome `bambulab.com` öffnen und wie gewohnt anmelden, auch mit Google.
+2. Entwicklertools öffnen (Mac: <kbd>⌥ ⌘ I</kbd>), Reiter „Application“, links „Cookies“ →
+   `https://bambulab.com`.
+3. Den Wert der Zeile `token` kopieren und in der App unter „Token von Hand eintragen“ einfügen.
+
+Als letzte Möglichkeit kann man versuchen, auf bambulab.com über „Passwort vergessen“ ein
+Passwort für das Google-Konto festzulegen und sich dann mit E-Mail und Passwort anzumelden.
 
 > Bambu Lab bietet für den Filament Manager keine offizielle Schnittstelle an. Die App nutzt
 > dieselben Endpunkte wie Bambu Studio, so wie sie von der Community dokumentiert wurden
@@ -86,7 +101,7 @@ kopieren.
 
 ## AMS live einrichten
 
-Unter **AMS & Bambu** → „Drucker im Heimnetz“ eintragen:
+Unter **Bambu** → „Drucker im Heimnetz“ eintragen:
 
 - **IP-Adresse** und **Zugangscode**: am Drucker unter Einstellungen bei WLAN/Netzwerk.
 - **Seriennummer**: in Bambu Studio unter Gerät oder auf dem Aufkleber am Drucker.
