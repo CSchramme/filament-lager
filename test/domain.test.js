@@ -158,3 +158,16 @@ test('Pakete anlegen, umbenennen, zusammenlegen, entfernen', async () => {
   assert.throws(() => planPlaces(settings, spools, { action: 'remove', name: 'Kiste' }), /nicht leer/);
   assert.ok(!planPlaces({ ...settings, places: ['9'] }, spools, { action: 'remove', name: '9' }).places.includes('9'));
 });
+
+test('Gramm ändern: Restgewicht, mit Spule oder Verbrauch', async () => {
+  const { weightPatch } = await import('../public/js/domain.js');
+  const s = seedSpools()[4]; // Kürbis Orange, ungeöffnet, 1000 g, Bambu Plastik
+  assert.deepEqual(weightPatch(s, settings, { net: 800 }), { netWeight: 800, opened: true });
+  assert.deepEqual(weightPatch(s, settings, { gross: 1074 }), { netWeight: 800, opened: true });
+  assert.deepEqual(weightPatch(s, settings, { gross: 900, spoolTypeId: 'pappe' }), { netWeight: 900, opened: true, spoolTypeId: 'pappe' });
+  assert.deepEqual(weightPatch(s, settings, { used: '12,6' }), { netWeight: 987, opened: true });
+  assert.equal(weightPatch(s, settings, { used: 5000 }).netWeight, 0);
+  assert.deepEqual(weightPatch(s, settings, { net: 1000 }), { netWeight: 1000, opened: false });
+  assert.throws(() => weightPatch(s, settings, {}), /Gewicht angeben/);
+  assert.throws(() => weightPatch(s, settings, { net: 'x' }), /Zahl/);
+});

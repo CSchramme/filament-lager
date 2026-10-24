@@ -1,10 +1,11 @@
-// Öffentliche Lese-Schnittstelle für andere Programme (Home Assistant,
-// Skripte, Dashboards). Zugriff mit API-Schlüssel, alternativ mit der
-// Anmeldung der Weboberfläche. Feldnamen sind deutsch wie die Oberfläche.
+// Schnittstelle für andere Programme (Home Assistant, Skripte, Waagen,
+// Dashboards): Bestand lesen und das Gewicht einer Rolle ändern, sonst nichts.
+// Zugriff mit API-Schlüssel, alternativ mit der Anmeldung der Weboberfläche.
+// Feldnamen sind deutsch wie die Oberfläche.
 import crypto from 'node:crypto';
 import express from 'express';
 import {
-  amsSlots, findSpoolByRef, grossOf, remainingShare, spoolPlace, spoolTypeOf, stockLevel,
+  amsSlots, findSpoolByRef, grossOf, normalizeSpool, remainingShare, spoolPlace, spoolTypeOf, stockLevel, weightPatch,
 } from '../public/js/domain.js';
 
 export function newApiKey() {
@@ -104,8 +105,8 @@ export function createPublicApi({ store, apiKey, isLoggedIn }) {
   // Andere Webseiten dürfen lesen; der Schlüssel steckt im Header, nicht im Cookie.
   router.use((req, res, next) => {
     res.set('Access-Control-Allow-Origin', '*');
-    res.set('Access-Control-Allow-Headers', 'X-API-Key, Authorization');
-    res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'X-API-Key, Authorization, Content-Type');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
     if (req.method === 'OPTIONS') return res.status(204).end();
     if (keyMatches(givenKey(req), apiKey()) || isLoggedIn(req)) return next();
     const msg = apiKey()
@@ -120,6 +121,7 @@ export function createPublicApi({ store, apiKey, isLoggedIn }) {
       '/api/v1/bestand': 'Summen: gesamt, nach Farbe, Material und Platz, knappe Rollen',
       '/api/v1/spulen': 'Alle Rollen. Filter: farbe, material, hersteller, paket, status (neu|ok|knapp|leer), im_ams (true|false)',
       '/api/v1/spulen/{nr}': 'Eine Rolle über ihre Nummer',
+      'POST /api/v1/spulen/{nr}/gewicht': 'Gewicht ändern mit genau einem Feld: rest_g, mit_spule_g oder verbraucht_g',
       '/api/v1/ams': 'Welche Rolle in welchem AMS-Slot liegt',
     },
   }));
@@ -136,6 +138,27 @@ export function createPublicApi({ store, apiKey, isLoggedIn }) {
     if (!s) return res.status(404).json({ fehler: `Keine Rolle mit der Nummer ${req.params.ref}.` });
     res.json(spoolOut(s, store.settings));
   });
+
+  // Gewicht ändern. Werte im JSON-Körper oder in der Adresse (?rest_g=650).
+  async function changeWeight(req, res) {
+    const idx = store.spools.indexOf(findSpoolByRef(store.spools, req.params.ref));
+    if (idx < 0) return res.status(404).json({ fehler: `Keine Rolle mit der Nummer ${req.params.ref}.` });
+    const src = { ...req.query, ...(req.body && typeof req.body === 'object' ? req.body : {}) };
+    const fields = ['rest_g', 'mit_spule_g', 'verbraucht_g'].filter((k) => src[k] !== undefined && String(src[k]).trim() !== '');
+    if (fields.length !== 1) return res.status(400).json({ fehler: 'Bitte genau ein Feld angeben: rest_g, mit_spule_g oder verbraucht_g.' });
+    const base = store.spools[idx];
+    let patch;
+    try {
+      patch = weightPatch(base, store.settings, { net: src.rest_g, gross: src.mit_spule_g, used: src.verbraucht_g });
+    } catch (err) {
+      return res.status(400).json({ fehler: err.message });
+    }
+    store.spools[idx] = normalizeSpool(patch, { base });
+    await store.save();
+    res.json({ vorher_g: base.netWeight, ...spoolOut(store.spools[idx], store.settings) });
+  }
+  router.post('/spulen/:ref/gewicht', changeWeight);
+  router.patch('/spulen/:ref', changeWeight);
 
   router.get('/ams', (req, res) => {
     const slots = amsSlots(store.settings, store.spools).map((slot) => {

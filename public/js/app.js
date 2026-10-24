@@ -2,7 +2,7 @@ import { createBackend } from './api.js';
 import {
   BRANDS, COLOR_PRESETS, MATERIALS, PURCHASE_WEIGHTS, amsSlots, colorDistance, colorHexFor, colorNameFor, filamentTypeOf, grossOf,
   lowStockLimit, netFromGross, normHex, parseCsv, placeList, placeName, remainingShare, spoolLabel, spoolPlace, spoolTypeOf,
-  spoolsFromRows, stockLevel, summarize, toCsv,
+  spoolsFromRows, stockLevel, summarize, toCsv, weightPatch,
 } from './domain.js';
 import {
   download, esc, fmt, fmtKg, icons, openDialog, readFile, ring, timeAgo, toast,
@@ -314,7 +314,7 @@ function rowHtml(s) {
     <div class="c-buy r num">${fmt(s.purchaseWeight)}</div>
     <div class="c-loc">${placeButton(s)}</div>
     <div class="c-meta pills"><span class="loc-m">${placeButton(s)}</span>${statusPills(s)}</div>
-    <div class="c-actions"><button class="btn small" type="button" data-action="weigh" data-id="${esc(s.id)}">${icons.scale}Wiegen</button></div>
+    <div class="c-actions"><button class="btn small" type="button" data-action="weigh" data-id="${esc(s.id)}">${icons.scale}Gramm</button></div>
   </article>`;
 }
 
@@ -472,53 +472,72 @@ function spoolDialog(spool, { copy = false } = {}) {
 // ---------------------------------------------------------------------------
 // Dialog: Spule wiegen
 
+// Gramm ändern: wiegen (mit Spule), Restgewicht direkt eintragen oder Verbrauch abziehen.
+const WEIGH_MODES = {
+  gross: { tab: 'Waage', label: 'Gewicht mit Spule laut Waage, in g', hint: 'Die Tara der Spulenart wird abgezogen.' },
+  net: { tab: 'Restgewicht', label: 'Filament auf der Spule, in g', hint: 'Das Restgewicht wird direkt übernommen.' },
+  used: { tab: 'Verbraucht', label: 'Verbraucht, in g', hint: 'Wird vom bisherigen Stand abgezogen.' },
+};
+let weighMode = 'gross';
+
 function weighDialog(s) {
   const types = app.settings.spoolTypes;
-  const tareFor = (id) => (types.find((t) => t.id === id) || types[0]).tare;
   openDialog({
-    title: 'Spule wiegen',
+    title: 'Gramm ändern',
     body: `
-      <div class="spool">${ring(s.colorHex, remainingShare(s))}<div class="txt"><div class="title">${esc(s.colorName || s.colorHex)}</div>
-        <div class="sub">${esc(s.material)} · Kauf ${fmt(s.purchaseWeight)} g · bisher ${fmt(s.netWeight)} g</div></div></div>
-      <div class="fields">
-        <label class="field scale-in full"><span>Gewicht mit Spule laut Waage, in g</span><input name="gross" type="number" inputmode="numeric" min="0" step="1" placeholder="${grossOf(s, app.settings)}"></label>
-        <label class="field full"><span>Spulenart</span><select name="spoolTypeId">${types.map((t) => `<option value="${esc(t.id)}" ${t.id === s.spoolTypeId ? 'selected' : ''}>${esc(t.name)} (Tara ${fmt(t.tare)} g)</option>`).join('')}</select></label>
+      <div class="spool">${ring(s.colorHex, remainingShare(s))}<div class="txt"><div class="title">${esc(spoolLabel(s))}</div>
+        <div class="sub">Kauf ${fmt(s.purchaseWeight)} g · bisher ${fmt(s.netWeight)} g · mit Spule ${fmt(grossOf(s, app.settings))} g</div></div></div>
+      <div class="segmented" role="radiogroup" aria-label="Eingabe">
+        ${Object.entries(WEIGH_MODES).map(([k, m]) => `<label><input type="radio" name="mode" value="${k}" ${k === weighMode ? 'checked' : ''}><span>${m.tab}</span></label>`).join('')}
       </div>
-      <div class="scale-out"><span class="small muted">Filament auf der Spule</span><span class="big" data-net>–</span><span class="small" data-diff>Gewicht mit Spule eingeben, die Tara wird abgezogen.</span></div>`,
-    foot: '<button type="button" class="btn" data-close>Abbrechen</button><span class="spacer"></span><button type="submit" class="btn primary">Gewicht speichern</button>',
+      <div class="fields">
+        <label class="field scale-in full"><span data-label></span><input name="value" type="number" inputmode="numeric" min="0" step="1"></label>
+        <label class="field full" data-type><span>Spulenart</span><select name="spoolTypeId">${types.map((t) => `<option value="${esc(t.id)}" ${t.id === s.spoolTypeId ? 'selected' : ''}>${esc(t.name)} (Tara ${fmt(t.tare)} g)</option>`).join('')}</select></label>
+      </div>
+      <div class="scale-out"><span class="small muted">Filament auf der Spule</span><span class="big" data-net>–</span><span class="small" data-diff></span></div>`,
+    foot: '<button type="button" class="btn" data-close>Abbrechen</button><span class="spacer"></span><button type="submit" class="btn primary">Speichern</button>',
     onReady(dlg, form) {
       const f = form.elements;
       const out = dlg.querySelector('[data-net]');
       const diff = dlg.querySelector('[data-diff]');
+      const input = () => ({ [f.mode.value]: f.value.value, spoolTypeId: f.spoolTypeId.value });
       const update = () => {
-        if (f.gross.value === '') {
+        const m = WEIGH_MODES[f.mode.value];
+        dlg.querySelector('[data-label]').textContent = m.label;
+        dlg.querySelector('[data-type]').hidden = f.mode.value !== 'gross';
+        f.value.placeholder = f.mode.value === 'gross' ? grossOf(s, app.settings) : f.mode.value === 'net' ? s.netWeight : '';
+        if (f.value.value === '') {
           out.textContent = '–';
+          diff.textContent = m.hint;
           return;
         }
-        const net = netFromGross(f.gross.value, tareFor(f.spoolTypeId.value));
-        const used = s.netWeight - net;
-        out.textContent = `${fmt(net)} g`;
-        if (net > s.purchaseWeight) diff.textContent = `Mehr als das Kaufgewicht (${fmt(s.purchaseWeight)} g). Stimmt die Spulenart?`;
-        else if (used > 0) diff.textContent = `${fmt(used)} g verbraucht seit dem letzten Stand.`;
-        else if (used < 0) diff.textContent = `${fmt(-used)} g mehr als bisher eingetragen.`;
+        const { netWeight } = weightPatch(s, app.settings, input());
+        const used = s.netWeight - netWeight;
+        out.textContent = `${fmt(netWeight)} g`;
+        if (netWeight > s.purchaseWeight) diff.textContent = `Mehr als das Kaufgewicht (${fmt(s.purchaseWeight)} g).${f.mode.value === 'gross' ? ' Stimmt die Spulenart?' : ''}`;
+        else if (used > 0) diff.textContent = `${fmt(used)} g weniger als bisher.`;
+        else if (used < 0) diff.textContent = `${fmt(-used)} g mehr als bisher.`;
         else diff.textContent = 'Unverändert.';
       };
-      f.gross.addEventListener('input', update);
+      form.querySelector('.segmented').addEventListener('change', () => {
+        weighMode = f.mode.value;
+        f.value.value = '';
+        update();
+        f.value.focus();
+      });
+      f.value.addEventListener('input', update);
       f.spoolTypeId.addEventListener('change', update);
-      f.gross.focus();
+      update();
+      f.value.focus();
     },
     async onSubmit(form) {
       const f = form.elements;
-      if (f.gross.value === '') throw new Error('Bitte das Gewicht von der Waage eingeben.');
-      const net = netFromGross(f.gross.value, tareFor(f.spoolTypeId.value));
-      const updated = await app.backend.updateSpool(s.id, {
-        netWeight: net,
-        spoolTypeId: f.spoolTypeId.value,
-        opened: net < s.purchaseWeight ? true : s.opened,
-      });
+      if (f.value.value === '') throw new Error('Bitte eine Grammzahl eingeben.');
+      const patch = weightPatch(s, app.settings, { [f.mode.value]: f.value.value, spoolTypeId: f.mode.value === 'gross' ? f.spoolTypeId.value : undefined });
+      const updated = await app.backend.updateSpool(s.id, patch);
       app.spools = app.spools.map((x) => (x.id === updated.id ? updated : x));
       refreshView();
-      toast(`${spoolLabel(updated)}: ${fmt(net)} g`);
+      toast(`${spoolLabel(updated)}: ${fmt(updated.netWeight)} g`);
     },
   });
 }
@@ -1063,9 +1082,16 @@ async function updateApiPanel() {
     <div class="fields">
       <label class="field full"><span>API-Schlüssel</span><span class="copy-row"><input id="api-key" readonly value="${esc(key)}"><button class="btn" type="button" data-action="copy" data-target="api-key">Kopieren</button></span></label>
     </div>
-    <p class="small muted">Mitschicken als Header <code>X-API-Key</code> oder in der Adresse als <code>?key=…</code>. Mit dem Schlüssel lässt sich der Bestand nur lesen, nicht ändern.</p>
+    <p class="small muted">Mitschicken als Header <code>X-API-Key</code> oder in der Adresse als <code>?key=…</code>. Mit dem Schlüssel lässt sich der Bestand lesen und das Gewicht einer Rolle ändern, sonst nichts.</p>
     <div class="api-links">${examples.map(([label, p], i) => `<div class="api-link"><span>${esc(label)}</span>
       <span class="copy-row"><input id="api-ex-${i}" readonly value="${esc(withKey(p))}"><a class="btn small" href="${esc(withKey(p))}" target="_blank" rel="noopener">Öffnen</a><button class="btn small" type="button" data-action="copy" data-target="api-ex-${i}">Kopieren</button></span></div>`).join('')}</div>
+    <details><summary>Gramm über die API ändern</summary>
+      <p class="small">Mit <code>POST</code> an <code>${esc(apiBase)}spulen/NR/gewicht</code> und genau einem Feld: <code>rest_g</code> (Restgewicht), <code>mit_spule_g</code> (von der Waage, Tara wird abgezogen) oder <code>verbraucht_g</code> (wird abgezogen).</p>
+      <pre class="code">curl -X POST -H "X-API-Key: ${esc(key)}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"verbraucht_g": 35}' \\
+  ${esc(apiBase)}spulen/1/gewicht</pre>
+    </details>
     <div class="actions"><button class="btn small ghost danger" type="button" data-action="api-key">Neuen Schlüssel erzeugen</button></div>`;
 }
 

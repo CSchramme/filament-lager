@@ -101,3 +101,38 @@ test('Rollen abrufen und filtern', async () => {
   assert.equal(ams.body.slots.length, 4);
   assert.equal(ams.body.ohne_slot.length, 4);
 });
+
+test('Gramm über die API ändern', async () => {
+  const key = store.data.apiKey;
+  const post = (url, body, headers = { 'X-API-Key': key }) => fetch(base + url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
+  }).then(async (r) => ({ status: r.status, body: await r.json() }));
+
+  // Restgewicht direkt
+  let r = await post('/api/v1/spulen/1/gewicht', { rest_g: 200 });
+  assert.equal(r.status, 200);
+  assert.deepEqual([r.body.vorher_g, r.body.rest_g, r.body.mit_spule_g], [237, 200, 474]);
+  // Mit Spule gewogen (Tara Bambu Plastik 274 g)
+  r = await post('/api/v1/spulen/1/gewicht', { mit_spule_g: 450 });
+  assert.equal(r.body.rest_g, 176);
+  // Verbrauch abziehen, auch als Adresse; PATCH geht ebenso
+  r = await post('/api/v1/spulen/%231/gewicht?verbraucht_g=26', {});
+  assert.equal(r.body.rest_g, 150);
+  const patched = await fetch(base + '/api/v1/spulen/5', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-API-Key': key }, body: '{"verbraucht_g": 12.4}',
+  }).then((x) => x.json());
+  assert.deepEqual([patched.rest_g, patched.geoeffnet], [988, true]); // war ungeöffnet
+  assert.equal(store.spools[0].netWeight, 150);
+
+  // Fehler
+  assert.equal((await post('/api/v1/spulen/1/gewicht', {})).status, 400);
+  assert.equal((await post('/api/v1/spulen/1/gewicht', { rest_g: 1, verbraucht_g: 2 })).status, 400);
+  assert.equal((await post('/api/v1/spulen/1/gewicht', { rest_g: 'viel' })).status, 400);
+  assert.equal((await post('/api/v1/spulen/999/gewicht', { rest_g: 1 })).status, 404);
+  assert.equal((await post('/api/v1/spulen/1/gewicht', { rest_g: 1 }, { 'X-API-Key': 'falsch' })).status, 401);
+  // Der Schlüssel darf sonst nichts ändern
+  const other = await fetch(base + '/api/spools/' + store.spools[0].id, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-API-Key': key }, body: '{"netWeight": 5}',
+  });
+  assert.equal(other.status, 401);
+});

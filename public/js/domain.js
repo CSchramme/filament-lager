@@ -210,6 +210,28 @@ export function netFromGross(gross, tare) {
   return Math.max(0, Math.round(Number(gross) - Number(tare)));
 }
 
+// Neues Restgewicht aus genau einer Angabe: net (Restgewicht), gross (mit
+// Spule, Tara der Spulenart wird abgezogen) oder used (verbraucht, wird
+// abgezogen). Ergebnis ist ein Patch für normalizeSpool.
+export function weightPatch(spool, settings, { net, gross, used, spoolTypeId } = {}) {
+  const given = (v) => v !== undefined && v !== null && String(v).trim() !== '';
+  const num = (v, name) => {
+    const n = Number(String(v).replace(',', '.'));
+    if (!Number.isFinite(n)) throw new Error(`${name} muss eine Zahl sein.`);
+    return n;
+  };
+  const typeId = spoolTypeId || spool.spoolTypeId;
+  let netWeight;
+  if (given(net)) netWeight = num(net, 'Restgewicht');
+  else if (given(gross)) netWeight = num(gross, 'Gewicht mit Spule') - tareOf({ spoolTypeId: typeId }, settings);
+  else if (given(used)) netWeight = spool.netWeight - num(used, 'Verbrauch');
+  else throw new Error('Bitte ein Gewicht angeben: Restgewicht, Gewicht mit Spule oder Verbrauch.');
+  netWeight = Math.max(0, Math.round(netWeight));
+  const patch = { netWeight, opened: netWeight < spool.purchaseWeight ? true : spool.opened };
+  if (spoolTypeId) patch.spoolTypeId = spoolTypeId;
+  return patch;
+}
+
 export function remainingShare(spool) {
   if (!spool.purchaseWeight) return 0;
   return Math.max(0, Math.min(1, spool.netWeight / spool.purchaseWeight));

@@ -189,10 +189,11 @@ bleibt Wiegen der genaue Weg.
 
 ## API
 
-Andere Programme (Home Assistant, Skripte, Dashboards) können den Bestand lesen. Unter
-**Einstellungen → API** einen Schlüssel erzeugen; dort stehen auch fertige Links zum Kopieren.
-Der Schlüssel erlaubt nur Lesen. Mitschicken als Header `X-API-Key: <schlüssel>`, als
-`Authorization: Bearer <schlüssel>` oder in der Adresse als `?key=<schlüssel>`.
+Andere Programme (Home Assistant, Skripte, Waagen, Dashboards) können den Bestand lesen und das
+Gewicht einer Rolle ändern. Unter **Einstellungen → API** einen Schlüssel erzeugen; dort stehen
+auch fertige Links zum Kopieren. Mehr als Lesen und Gramm ändern erlaubt der Schlüssel nicht.
+Mitschicken als Header `X-API-Key: <schlüssel>`, als `Authorization: Bearer <schlüssel>` oder in
+der Adresse als `?key=<schlüssel>`.
 
 | Adresse | Inhalt |
 |---|---|
@@ -200,6 +201,7 @@ Der Schlüssel erlaubt nur Lesen. Mitschicken als Header `X-API-Key: <schlüssel
 | `GET /api/v1/spulen` | Alle Rollen. Filter: `farbe`, `material`, `hersteller` (Teiltreffer), `paket`, `status` (`neu`, `ok`, `knapp`, `leer`), `im_ams` (`true`/`false`) |
 | `GET /api/v1/spulen/12` | Rolle Nummer 12 |
 | `GET /api/v1/ams` | Welche Rolle in welchem AMS-Slot liegt |
+| `POST /api/v1/spulen/12/gewicht` | Gewicht von Rolle 12 ändern, mit genau einem Feld: `rest_g` (Restgewicht), `mit_spule_g` (von der Waage, Tara wird abgezogen) oder `verbraucht_g` (wird abgezogen). `PATCH /api/v1/spulen/12` geht ebenso. |
 
 Beispiel:
 
@@ -219,6 +221,15 @@ curl -H "X-API-Key: DEIN_SCHLUESSEL" "https://lager.deine-domain.de/api/v1/spule
 }
 ```
 
+Gramm ändern:
+
+```sh
+curl -X POST -H "X-API-Key: DEIN_SCHLUESSEL" -H "Content-Type: application/json" \
+  -d '{"mit_spule_g": 924}' "https://lager.deine-domain.de/api/v1/spulen/3/gewicht"
+```
+
+Die Antwort enthält die Rolle mit dem neuen Stand und `vorher_g`.
+
 Home Assistant (`configuration.yaml`), Sensor mit der Gesamtmenge und allen Farben als Attribut:
 
 ```yaml
@@ -234,7 +245,18 @@ rest:
         json_attributes:
           - nach_farbe
           - knapp
+
+rest_command:
+  filament_verbrauch:
+    url: "https://lager.deine-domain.de/api/v1/spulen/{{ nr }}/gewicht"
+    method: POST
+    headers:
+      X-API-Key: !secret filament_lager_key
+    content_type: application/json
+    payload: '{"verbraucht_g": {{ gramm }}}'
 ```
+
+Aufruf in einer Automation: Aktion `rest_command.filament_verbrauch` mit `nr: 3` und `gramm: 25`.
 
 ## Ohne Server
 
@@ -257,7 +279,7 @@ Aufbau:
   - `js/seed.js` – Startbestand aus der Excel-Tabelle
 - `start.cjs` – Startdatei für Plesk, `src/server.js` – Start, `src/app.js` – HTTP-Schnittstelle,
   `src/auth.js` – Anmeldung, `src/store.js` – Datendatei
-- `src/api-v1.js` – Lese-API mit Schlüssel
+- `src/api-v1.js` – API mit Schlüssel (lesen, Gramm ändern)
 - `src/bambu/cloud.js` – Bambu Cloud (Anmeldung, Filament Manager)
 - `src/bambu/sync.js` – Abgleich Lager ↔ Filament Manager
 - `src/bambu/printer.js` – MQTT-Verbindung zum Drucker, `src/bambu/ams.js` – AMS-Abgleich

@@ -469,7 +469,16 @@ body.has-movebar main.wrap { padding-bottom: 120px; }
 
 .panel.login { max-width: 440px; width: 100%; margin: 40px auto 0; }
 
+/* Gramm ändern: Umschalter Waage / Restgewicht / Verbraucht */
+.segmented { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; background: var(--surface-2); border-radius: var(--radius-sm); }
+.segmented label { position: relative; }
+.segmented input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.segmented span { display: block; text-align: center; padding: 8px 6px; border-radius: 4px; font-weight: 700; font-size: var(--step--1); color: var(--ink-2); }
+.segmented input:checked + span { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+.segmented input:focus-visible + span { outline: 2px solid var(--accent); }
+
 /* API */
+pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); border-radius: var(--radius-sm); overflow-x: auto; font-family: var(--font-mono); font-size: var(--step--1); line-height: 1.5; }
 .copy-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
 .copy-row input { font-family: var(--font-mono); font-size: var(--step--1); }
 .api-links { display: grid; gap: 10px; }
