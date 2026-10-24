@@ -10,13 +10,19 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_FILE = process.env.LAGER_DATEI || path.join(root, 'data', 'lager.json');
 const PASSWORD = process.env.LAGER_PASSWORT || '';
+// Unter Plesk (Phusion Passenger) ist das Lager aus dem Internet erreichbar
+// und braucht deshalb ein Passwort.
+const ON_WEBSERVER = Boolean(globalThis.PhusionPassenger || process.env.PASSENGER_APP_ENV);
 const AUTO_PULL_MS = 15 * 60 * 1000;
 
 const store = new Store(DATA_FILE);
 await store.load();
 
 const printers = new PrinterManager();
-const app = createApp({ store, printers, publicDir: path.join(root, 'public'), password: PASSWORD });
+const app = createApp({
+  store, printers, publicDir: path.join(root, 'public'), password: PASSWORD, requirePassword: ON_WEBSERVER,
+});
+if (ON_WEBSERVER && !PASSWORD) console.error('LAGER_PASSWORT fehlt: Das Lager bleibt gesperrt, bis ein Passwort gesetzt ist.');
 printers.sync(store.bambu.printers);
 
 setInterval(() => {

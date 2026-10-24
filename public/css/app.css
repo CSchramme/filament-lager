@@ -75,6 +75,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
@@ -464,6 +465,8 @@ dialog form { display: grid; gap: 0; max-height: calc(100dvh - 24px); }
 .movebar .btn { background: transparent; color: var(--surface); border-color: color-mix(in srgb, var(--surface) 40%, transparent); }
 body.has-movebar .toasts { bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
 body.has-movebar main.wrap { padding-bottom: 120px; }
+
+.panel.login { max-width: 440px; width: 100%; margin: 40px auto 0; }
 
 /* Einstellungen */
 .types { display: grid; gap: 8px; }

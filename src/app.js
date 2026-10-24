@@ -1,5 +1,4 @@
 // HTTP-Schnittstelle des Filament-Lagers und Auslieferung der Weboberfläche.
-import crypto from 'node:crypto';
 import express from 'express';
 import {
   colorNameFor, newId, normalizeSettings, normalizeSpool, planMove, planPlaces,
@@ -8,6 +7,7 @@ import { seedSpools } from '../public/js/seed.js';
 import { accountFromToken, BambuCloud, CloudError } from './bambu/cloud.js';
 import { reconcileAms } from './bambu/ams.js';
 import { applyPull, applyPush, pullPreview, pushPreview } from './bambu/sync.js';
+import { createAuth } from './auth.js';
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -16,23 +16,47 @@ class HttpError extends Error {
   }
 }
 
-function basicAuth(password) {
-  const expected = Buffer.from(password);
-  return (req, res, next) => {
-    const header = req.headers.authorization || '';
-    const given = header.startsWith('Basic ') ? Buffer.from(header.slice(6), 'base64').toString().split(':').slice(1).join(':') : '';
-    const buf = Buffer.from(given);
-    if (buf.length === expected.length && crypto.timingSafeEqual(buf, expected)) return next();
-    res.set('WWW-Authenticate', 'Basic realm="Filament-Lager", charset="UTF-8"').status(401).send('Passwort erforderlich');
-  };
-}
-
-export function createApp({ store, printers, publicDir, password = '', cloudFactory = (opts) => new BambuCloud(opts) }) {
+// requirePassword: auf einem Webserver (Plesk) ohne gesetztes Passwort
+// bleibt die Schnittstelle gesperrt, damit niemand den Bestand ändern kann.
+export function createApp({
+  store, printers, publicDir, password = '', requirePassword = false, cloudFactory = (opts) => new BambuCloud(opts),
+}) {
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', 'loopback');
   app.use(express.json({ limit: '5mb' }));
-  if (password) app.use(basicAuth(password));
+  // Die Oberfläche selbst enthält keine Lagerdaten und ist ohne Anmeldung abrufbar.
   app.use(express.static(publicDir));
+
+  const auth = createAuth(password);
+  const authState = (req) => {
+    if (!password) return requirePassword ? 'missing' : 'none';
+    return auth.isLoggedIn(req) ? 'ok' : 'required';
+  };
+
+  app.get('/api/health', (req, res) => res.json({ ok: true, mode: 'server', auth: authState(req) }));
+
+  app.post('/api/login', (req, res) => {
+    if (!password) throw new HttpError(400, 'Für dieses Lager ist kein Passwort eingerichtet.');
+    const result = auth.login(req, res, String((req.body || {}).password || ''));
+    if (result === 'gesperrt') throw new HttpError(429, 'Zu viele Fehlversuche. Bitte in 15 Minuten erneut versuchen.');
+    if (result === 'falsch') throw new HttpError(401, 'Das Passwort ist falsch.');
+    res.json({ ok: true });
+  });
+
+  app.post('/api/logout', (req, res) => {
+    auth.logout(req, res);
+    res.json({ ok: true });
+  });
+
+  app.use('/api', (req, res, next) => {
+    const state = authState(req);
+    if (state === 'missing') {
+      throw new HttpError(503, 'Das Lager ist gesperrt, weil kein Passwort gesetzt ist. In Plesk unter Node.js die Umgebungsvariable LAGER_PASSWORT eintragen und die App neu starten.');
+    }
+    if (state === 'required') return res.status(401).json({ error: 'Bitte anmelden.', login: true });
+    next();
+  });
 
   let pendingLogin = null; // { account, region, status: 'code'|'tfa', tfaKey }
   const cloudCfg = () => store.bambu.cloud;
@@ -108,8 +132,6 @@ export function createApp({ store, printers, publicDir, password = '', cloudFact
   }
 
   // -- Lager --------------------------------------------------------------
-
-  app.get('/api/health', (req, res) => res.json({ ok: true, mode: 'server' }));
 
   app.get('/api/state', (req, res) => res.json({ spools: store.spools, settings: store.settings }));
 

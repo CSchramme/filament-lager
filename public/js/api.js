@@ -7,8 +7,11 @@ import {
 import { seedSpools } from './seed.js';
 
 class ServerBackend {
-  constructor() {
+  // auth: 'none' (kein Passwort), 'ok' (angemeldet), 'required' (Anmeldung nötig),
+  // 'missing' (Webserver ohne Passwort, gesperrt)
+  constructor(auth) {
     this.mode = 'server';
+    this.auth = auth || 'none';
   }
 
   async req(method, url, body) {
@@ -24,9 +27,14 @@ class ServerBackend {
     } catch {
       data = null;
     }
+    // Sitzung abgelaufen: neu laden zeigt die Anmeldung.
+    if (res.status === 401 && data && data.login) location.reload();
     if (!res.ok) throw new Error((data && data.error) || `Server antwortet mit ${res.status}.`);
     return data;
   }
+
+  appLogin(password) { return this.req('POST', 'api/login', { password }); }
+  appLogout() { return this.req('POST', 'api/logout', {}); }
 
   getState() { return this.req('GET', 'api/state'); }
   createSpools(spools) { return this.req('POST', 'api/spools', { spools }).then((d) => d.spools); }
@@ -180,7 +188,7 @@ export async function createBackend() {
     const res = await fetch('api/health', { cache: 'no-store' });
     if (res.ok) {
       const data = await res.json();
-      if (data && data.mode === 'server') return new ServerBackend();
+      if (data && data.mode === 'server') return new ServerBackend(data.auth);
     }
   } catch {
     // kein Server erreichbar

@@ -35,6 +35,8 @@ async function init() {
   mode.dataset.mode = app.backend.mode;
   mode.textContent = server ? 'Server' : 'Nur Browser';
   mode.title = server ? 'Daten liegen auf dem Server (data/lager.json).' : 'Kein Server gefunden. Die Daten liegen nur in diesem Browser.';
+  if (app.backend.auth === 'required') return renderLogin();
+  if (app.backend.auth === 'missing') return renderLocked();
   try {
     await reload();
   } catch (err) {
@@ -90,6 +92,44 @@ function initDragAndDrop() {
     }
     run(() => dropOn(ids, JSON.parse(zone.dataset.dropZone)));
   });
+}
+
+function renderLogin() {
+  document.querySelector('.tabs').hidden = true;
+  $view.innerHTML = `<section class="panel login">
+    <div class="panel-head"><h2>Anmelden</h2></div>
+    <form class="fields" id="login-form">
+      <input type="text" name="username" value="Filament-Lager" autocomplete="username" hidden>
+      <label class="field full"><span>Passwort</span><input name="password" type="password" autocomplete="current-password" required></label>
+      <div class="actions full"><button class="btn primary" type="submit">Anmelden</button></div>
+    </form>
+    <p class="small muted">Das Passwort ist der Wert von <code>LAGER_PASSWORT</code>, der beim Einrichten festgelegt wurde.</p>
+  </section>`;
+  const form = document.getElementById('login-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await app.backend.appLogin(form.elements.password.value);
+      location.reload();
+    } catch (err) {
+      toast(err.message, 'error');
+      form.elements.password.select();
+    }
+  });
+  form.elements.password.focus();
+}
+
+function renderLocked() {
+  document.querySelector('.tabs').hidden = true;
+  $view.innerHTML = `<section class="panel login">
+    <div class="panel-head"><h2>Passwort fehlt</h2></div>
+    <p>Das Lager läuft auf einem Webserver und bleibt ohne Passwort gesperrt, damit niemand aus dem Internet deinen Bestand ändern kann.</p>
+    <ol class="steps">
+      <li>In Plesk bei der Domain „Node.js“ öffnen.</li>
+      <li>Unter „Benutzerdefinierte Umgebungsvariablen“ <code>LAGER_PASSWORT</code> mit einem langen Passwort eintragen.</li>
+      <li>„App neu starten“ klicken und diese Seite neu laden.</li>
+    </ol>
+  </section>`;
 }
 
 async function reload() {
@@ -983,7 +1023,8 @@ function renderSettings() {
           <li>Die Datei hier auswählen. Erkannt werden Spalten wie Art, Hersteller, Farbe, Kaufgewicht, Gewicht mit Spule, Gewicht, Paketnummer, geöffnet?, im AMS und Spulenart.</li>
         </ol>
       </details>
-      <div class="actions"><button class="btn small" type="button" data-action="seed">Startdaten aus der Excel-Tabelle neu laden</button></div>
+      <div class="actions"><button class="btn small" type="button" data-action="seed">Startdaten aus der Excel-Tabelle neu laden</button>
+        ${app.backend.auth === 'ok' ? '<button class="btn small" type="button" data-action="app-logout">Abmelden</button>' : ''}</div>
     </div>
   </section>`;
 }
@@ -1010,6 +1051,10 @@ const actions = {
   place: (el) => placeDialog(findSpool(el.dataset.id)),
   'place-add': () => placeAddDialog(),
   'place-edit': (el) => placeEditDialog(el.dataset.place),
+  'app-logout': () => run(async () => {
+    await app.backend.appLogout();
+    location.reload();
+  }),
   'select-clear': () => {
     app.selected.clear();
     updatePlaces();

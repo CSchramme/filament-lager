@@ -67,7 +67,7 @@ Einstellungen über Umgebungsvariablen:
 |-------------------|---------------------------------------------|--------------------|
 | `PORT`            | Port der Weboberfläche                      | `3000`             |
 | `LAGER_DATEI`     | Pfad der Datendatei                         | `data/lager.json`  |
-| `LAGER_PASSWORT`  | Passwort für die Oberfläche (Benutzername egal) | kein Passwort  |
+| `LAGER_PASSWORT`  | Passwort für die Anmeldung (unter Plesk Pflicht) | kein Passwort  |
 
 ## Dauerhaft laufen lassen (Raspberry Pi, NAS, Heimserver)
 
@@ -78,6 +78,48 @@ docker compose up -d --build
 ```
 
 Die Daten landen im Ordner `data/` neben der `docker-compose.yml`.
+
+## Auf einem Webserver mit Plesk
+
+Voraussetzung: Plesk mit der Erweiterung „Node.js“ (Node.js 20 oder neuer) und eine Domain oder
+Subdomain, z. B. `lager.deine-domain.de`, mit SSL-Zertifikat (Let's Encrypt).
+
+1. **Dateien hochladen:** Das Repository als ZIP herunterladen. Im Plesk-Dateimanager einen
+   neuen Ordner **neben** `httpdocs` anlegen, z. B. `/filament-lager`, die ZIP dort hochladen
+   und entpacken. Die Dateien (`package.json`, `start.cjs`, `public/`, `src/` …) müssen direkt
+   in `/filament-lager` liegen, nicht in einem Unterordner.
+2. **Node.js einrichten:** In Plesk bei der Domain auf „Node.js“ gehen und eintragen:
+
+   | Feld                                  | Wert                                   |
+   |---------------------------------------|----------------------------------------|
+   | Node.js-Version                       | 20 oder neuer                          |
+   | Anwendungsstamm                       | `/filament-lager`                      |
+   | Dokumentstamm                         | `/filament-lager/public`               |
+   | Anwendungsmodus                       | `production`                           |
+   | Anwendungsstartdatei                  | `start.cjs`                            |
+   | Benutzerdefinierte Umgebungsvariablen | `LAGER_PASSWORT` = ein langes Passwort |
+
+3. **„NPM install“** klicken, danach **„Node.js aktivieren“** (oder „App neu starten“).
+4. Die Domain im Browser öffnen und mit dem Passwort anmelden. Am Handy bleibt man angemeldet.
+
+Wichtig:
+
+- **Startdatei ist `start.cjs`**, nicht `src/server.js`. Plesk lädt die Startdatei auf eine Art,
+  die mit modernen JavaScript-Modulen nicht funktioniert; `start.cjs` lädt den Server richtig.
+- **Ohne `LAGER_PASSWORT` bleibt das Lager unter Plesk gesperrt**, damit niemand aus dem
+  Internet den Bestand ändern oder die Bambu-Anmeldung nutzen kann. Nach 10
+  Fehlversuchen sperrt die Anmeldung eine Adresse für 15 Minuten.
+- Die Daten liegen in `/filament-lager/data/lager.json`, außerhalb des Dokumentstamms und damit
+  nicht direkt abrufbar. Plesk-Backups sichern sie mit.
+- **Bambu Filament Manager** (Cloud) funktioniert auch vom Webserver aus, sofern der Hoster
+  ausgehende Verbindungen erlaubt.
+- **AMS live** (Drucker im Heimnetz) funktioniert vom Webserver aus nicht, weil der Drucker nur
+  im Heimnetz erreichbar ist. Pakete und AMS-Slots lassen sich trotzdem unter „Plätze“ von Hand
+  pflegen.
+- Plesk hält die App an, wenn sie eine Weile nicht benutzt wird. Der automatische Abgleich alle
+  15 Minuten läuft nur, solange die App aktiv ist.
+- **Update:** neue Dateien hochladen (den Ordner `data/` dabei nicht überschreiben),
+  „NPM install“ und „App neu starten“.
 
 ## Bambu Filament Manager verbinden
 
@@ -145,7 +187,8 @@ Aufbau:
 - `public/` – Oberfläche (HTML, CSS, JavaScript-Module ohne Build-Schritt)
   - `js/domain.js` – Fachlogik (Gewichte, Farben, CSV), auch vom Server genutzt
   - `js/seed.js` – Startbestand aus der Excel-Tabelle
-- `src/server.js` – Start, `src/app.js` – HTTP-Schnittstelle, `src/store.js` – Datendatei
+- `start.cjs` – Startdatei für Plesk, `src/server.js` – Start, `src/app.js` – HTTP-Schnittstelle,
+  `src/auth.js` – Anmeldung, `src/store.js` – Datendatei
 - `src/bambu/cloud.js` – Bambu Cloud (Anmeldung, Filament Manager)
 - `src/bambu/sync.js` – Abgleich Lager ↔ Filament Manager
 - `src/bambu/printer.js` – MQTT-Verbindung zum Drucker, `src/bambu/ams.js` – AMS-Abgleich
