@@ -21,9 +21,10 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
   Slot, Paket, neues Paket).
 - **Rollennummern**: Jede Rolle hat eine feste Nummer (#1, #2, …), die sich nie ändert und nach
   dem Löschen nicht neu vergeben wird. Gut zum Aufschreiben auf die Spule; die Suche findet `#12`.
-- **Rechner**: STL oder 3MF hochladen, Rolle wählen, Preis mit Filament, Strom, Abnutzung und
-  Gewinn ablesen (siehe unten).
-- **Drucke**: Druckverlauf von Bambu mit Kosten je Druck, Verkäufe mit Umsatz und Gewinn.
+- **Rechner**: STL oder 3MF hochladen, Rolle wählen, Preis mit Filament, Strom, Drucker,
+  Fehldrucken, Arbeit und Gewinn ablesen (siehe unten).
+- **Drucke**: Belege mit der Aufteilung des Preises pro Teil, Umsatz und Gewinn, Stromabrechnung
+  für den, der den Strom bezahlt, und der Druckverlauf von Bambu mit Kosten je Druck.
 - **API** zum Abrufen: Bestand je Farbe, Material und Platz, einzelne Rollen über ihre Nummer,
   AMS-Belegung (siehe unten).
 - Suchen, filtern (im AMS, geöffnet, ungeöffnet, knapp) und sortieren.
@@ -195,14 +196,25 @@ bleibt Wiegen der genaue Weg.
 Unter **Rechner** eine STL- oder 3MF-Datei hochladen (die Datei bleibt auf dem Gerät), eine Rolle
 aus dem Lager wählen und den Preis ablesen:
 
-| Posten | Rechnung |
-|---|---|
-| Filament | Gramm × Kaufpreis der Rolle ÷ Kaufgewicht |
-| Strom | Druckzeit × Leistung des Druckers × Strompreis (Standard 120 W und 0,30 € pro kWh) |
-| Abnutzung | 5 % auf Filament + Strom |
-| Selbstkosten | Filament + Strom + Abnutzung |
-| Gewinn | 10 % auf die Selbstkosten |
-| **Preis pro Stück** | Selbstkosten + Gewinn, dazu der Preis für die eingegebene Stückzahl |
+| Posten | Rechnung | Standard |
+|---|---|---|
+| Filament | Gramm × Kaufpreis der Rolle ÷ Kaufgewicht | ohne Kaufpreis 20 € pro kg |
+| Strom | Druckzeit × Leistung des Druckers × Strompreis | 120 W, 0,30 € pro kWh |
+| Drucker | Druckzeit × Stundensatz für Abnutzung, Düsen, Platten, Ersatzteile | 0,30 € pro Stunde |
+| Fehldrucke | Zuschlag auf Filament + Strom, weil nicht jeder Druck klappt | 10 % |
+| Arbeit | Arbeitszeit pro Auftrag × Stundenlohn, geteilt durch die Stückzahl | 5 Min. × 15 € pro Stunde |
+| Selbstkosten | Summe der Posten oben | |
+| Gewinn | Aufschlag auf die Selbstkosten | 30 % |
+| **Preis pro Stück** | Selbstkosten + Gewinn | |
+| Mindestpreis | gilt für den ganzen Beleg, darunter kommt ein Aufschlag dazu | 3 € |
+
+Beispiel Kabelhalter, 31,2 g zu 2 ct, 1:24 Std.: Filament 0,62 € + Strom 0,05 € + Drucker 0,42 € +
+Fehldrucke 0,07 € + Arbeit 1,25 € = 2,41 € Selbstkosten, dazu 0,72 € Gewinn, also **3,13 €**. Bei
+drei Stück verteilt sich die Arbeit, dann kostet eines 2,05 €.
+
+Alle Werte stehen unter **Einstellungen → Preisrechnung**. Arbeitszeit und Gewinn lassen sich im
+Rechner für die einzelne Rechnung ändern. Jeder Posten wird auf Cent gerundet, damit die Beträge
+auf dem Beleg genau aufgehen.
 
 - **Gramm:** Bei einer in Bambu Studio geslicten 3MF (nach dem Slicen über Datei → Exportieren die
   geslicte Platte als `.gcode.3mf` speichern) nimmt der Rechner die genauen Gramm und zeigt die Druckzeit. Bei einer STL oder
@@ -212,26 +224,39 @@ aus dem Lager wählen und den Preis ablesen:
   „Kaufpreis der Rolle in €“ oder direkt im Rechner, der danach fragt, wenn er fehlt. Bis dahin
   rechnet er mit dem Standardpreis pro kg aus den Einstellungen.
 - **Druckzeit:** kommt aus einer geslicten 3MF oder dem Druckverlauf; sonst von Hand eintragen
-  (z. B. `1:30`). Strompreis und Leistung des Druckers stehen unter Einstellungen; die Leistung
-  hängt vom Modell und Material ab, 120 W ist ein Richtwert für PLA.
-- Abnutzung und Gewinn sind unter Einstellungen voreingestellt (5 % und 10 %) und lassen sich
-  im Rechner für die einzelne Rechnung ändern.
+  (z. B. `1:30`). Ohne Druckzeit fehlen Strom und Drucker im Preis. Die Leistung hängt vom Modell
+  und Material ab, 120 W ist ein Richtwert für PLA.
 - Der Rechner zeigt, ob die gewählte Rolle reicht, und schlägt sonst Rollen in derselben Farbe vor.
   „… g von #5 abziehen“ verbucht den Druck direkt im Lager. „Angebot kopieren“ legt einen kurzen
-  Text mit Modell, Farbe und Preis in die Zwischenablage. „Verkauf eintragen“ speichert den Verkauf.
+  Text mit Modell, Farbe und Preis in die Zwischenablage. „Zum Beleg hinzufügen“ legt das Teil in
+  den offenen Beleg.
 
-## Drucke und Verkäufe
+## Belege, Strom und Druckverlauf
 
-Unter **Drucke** steht der Druckverlauf aus dem Bambu-Konto (wird mit dem automatischen Abgleich
-geholt, „Aktualisieren“ holt ihn sofort): Titelbild, Datum, Drucker, Gramm, Druckzeit, die
-verwendeten Farben mit der passenden Lagerrolle und der Preis nach derselben Rechnung wie im
-Rechner, bei mehrfarbigen Drucken je Farbe mit dem Kaufpreis der passenden Rolle.
+Unter **Drucke**:
 
-- **Verkaufen**: trägt einen Verkauf mit vorgeschlagenem Preis ein (Anzahl, Datum, Kunde, Notiz
-  anpassbar). Oben stehen Umsatz und Gewinn im Monat und insgesamt.
-- **Im Rechner**: übernimmt Gramm, Druckzeit und Farbe in den Rechner.
-- **Erneut drucken**: Einen Druck starten erlaubt Bambu nur in den eigenen Apps. Die App zeigt den
-  Weg über Bambu Handy und verlinkt das Modell auf MakerWorld, wenn es von dort stammt.
+- **Offener Beleg**: sammelt Teile aus dem Rechner und dem Druckverlauf („Zum Beleg“). Anzahl und
+  Preis pro Stück lassen sich ändern (ein eigener Preis ändert nur den Gewinn), „Position von
+  Hand“ fügt z. B. Versand hinzu. Mit Datum, Kunde und Notiz wird daraus mit „Beleg erstellen“ ein
+  Beleg mit fester Nummer (2026-001, 2026-002, …). Der offene Beleg bleibt im Browser, bis er
+  erstellt wird.
+- **Beleg**: öffnet sich in einem neuen Fenster zum Drucken oder „Als PDF sichern“. Unter jeder
+  Position steht die Aufteilung pro Teil und für alle Stück: Filament, Strom, Drucker, Fehldrucke,
+  Arbeit, Selbstkosten, Gewinn. Name und Adresse für den Beleg und den Hinweis für
+  Kleinunternehmer (§ 19 UStG) gibt es unter Einstellungen → Beleg und Strom. Alte Belege öffnen
+  sich durch Antippen in der Liste; Umsatz und Gewinn stehen darüber.
+- **Strom für Papa**: Wer den Strom bezahlt (Name unter Einstellungen), bekommt den Strom aller
+  Drucke seit der letzten Abrechnung, auch für abgebrochene und eigene Drucke. Gerechnet wird aus
+  dem Bambu-Druckverlauf (Druckzeit × Watt × Strompreis); ohne Bambu-Anmeldung aus den Belegen.
+  „Abrechnung ansehen“ zeigt eine druckbare Aufstellung mit Unterschriftszeilen, „… an Papa
+  gegeben“ speichert die Abrechnung, danach beginnt die nächste. Gezählt wird nur die Zeit beim
+  Drucken, nicht der Standby.
+- **Druckverlauf** aus dem Bambu-Konto (wird mit dem automatischen Abgleich geholt,
+  „Aktualisieren“ holt ihn sofort): Titelbild, Datum, Drucker, Gramm, Druckzeit, die verwendeten
+  Farben mit der passenden Lagerrolle und der Preis, bei mehrfarbigen Drucken je Farbe mit dem
+  Kaufpreis der passenden Rolle. **Im Rechner** übernimmt Gramm, Druckzeit und Farbe in den
+  Rechner. **Erneut drucken**: Einen Druck starten erlaubt Bambu nur in den eigenen Apps. Die App
+  zeigt den Weg über Bambu Handy und verlinkt das Modell auf MakerWorld, wenn es von dort stammt.
 
 Den Druckverlauf liefert die inoffizielle Bambu-Schnittstelle (`/v1/user-service/my/tasks`); bekannt
 sind die Status „fertig“ und „abgebrochen“.

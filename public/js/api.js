@@ -2,7 +2,8 @@
 // alle Änderungen dorthin. Ohne Server (z. B. als statische Seite) speichert
 // das Lager im Browser; die Bambu-Anbindung ist dann nicht verfügbar.
 import {
-  assignNumbers, newId, normalizeSale, normalizeSettings, normalizeSpool, placeList, planMove, planPlaces, salesSummary,
+  assignNumbers, newId, nextReceiptNr, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, placeList, planMove,
+  planPlaces, salesSummary,
 } from './domain.js';
 import { seedSpools } from './seed.js';
 
@@ -42,6 +43,9 @@ class ServerBackend {
   addSale(sale) { return this.req('POST', 'api/verkaeufe', sale); }
   updateSale(id, patch) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id), patch); }
   deleteSale(id) { return this.req('DELETE', 'api/verkaeufe/' + encodeURIComponent(id)); }
+  powerPayments() { return this.req('GET', 'api/strom'); }
+  addPowerPayment(p) { return this.req('POST', 'api/strom', p); }
+  deletePowerPayment(id) { return this.req('DELETE', 'api/strom/' + encodeURIComponent(id)); }
   newApiKey() { return this.req('POST', 'api/schluessel', {}).then((d) => d.key); }
 
   getState() { return this.req('GET', 'api/state'); }
@@ -110,11 +114,15 @@ class LocalBackend {
         spools: (raw.spools || []).map((s) => normalizeSpool(s, { keepTimestamps: true })),
         nextNr: raw.nextNr,
         sales: (Array.isArray(raw.sales) ? raw.sales : []).map((x) => normalizeSale(x)),
+        receiptSeq: raw.receiptSeq || {},
+        powerPayments: (Array.isArray(raw.powerPayments) ? raw.powerPayments : []).map((x) => normalizePowerPayment(x)),
       };
+      // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
+      for (const sale of [...data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(data, sale.date);
       data.settings.places = placeList(data.settings, data.spools);
       return assignNumbers(data);
     }
-    const data = { settings: normalizeSettings(), spools: seedSpools(), nextNr: 1, sales: [] };
+    const data = { settings: normalizeSettings(), spools: seedSpools(), nextNr: 1, sales: [], receiptSeq: {}, powerPayments: [] };
     this.write(data);
     return data;
   }
@@ -181,6 +189,7 @@ class LocalBackend {
   async addSale(sale) {
     const data = this.load();
     const created = normalizeSale({ ...sale, id: undefined, createdAt: undefined });
+    created.nr = nextReceiptNr(data, created.date);
     data.sales.unshift(created);
     this.write(data);
     return { sale: created, ...this.salesView(data) };
@@ -188,9 +197,28 @@ class LocalBackend {
 
   async updateSale(id, patch) {
     const data = this.load();
-    data.sales = data.sales.map((x) => (x.id === id ? normalizeSale({ ...x, ...patch, id: x.id, createdAt: x.createdAt }) : x));
+    data.sales = data.sales.map((x) => (x.id === id ? normalizeSale({ ...x, ...patch, id: x.id, nr: x.nr, createdAt: x.createdAt }) : x));
     this.write(data);
     return this.salesView(data);
+  }
+
+  async powerPayments() {
+    return { payments: this.load().powerPayments };
+  }
+
+  async addPowerPayment(p) {
+    const data = this.load();
+    const payment = normalizePowerPayment({ ...p, id: undefined });
+    data.powerPayments.unshift(payment);
+    this.write(data);
+    return { payment, payments: data.powerPayments };
+  }
+
+  async deletePowerPayment(id) {
+    const data = this.load();
+    data.powerPayments = data.powerPayments.filter((x) => x.id !== id);
+    this.write(data);
+    return { payments: data.powerPayments };
   }
 
   async deleteSale(id) {

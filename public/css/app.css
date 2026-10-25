@@ -571,6 +571,25 @@ input.pct { width: 4.2em; min-height: 30px; padding: 2px 6px; text-align: right;
   .task-side { justify-items: start; grid-template-columns: auto auto auto; align-items: baseline; gap: 8px; }
 }
 .price-ask { display: grid; gap: 8px; }
+button.sale-title { display: block; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; color: inherit; }
+button.sale-title:hover strong, button.sale-title:hover { text-decoration: underline; }
+button.link { padding: 0; border: 0; background: none; color: var(--accent); font-weight: 700; text-decoration: underline; cursor: pointer; }
+.field > small { font-size: var(--step--1); }
+
+/* Offener Beleg */
+.draft-list { display: grid; }
+.draft-row { display: grid; grid-template-columns: minmax(0, 1fr) 5em 6.5em 6em auto; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.draft-title { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.draft-field { display: grid; gap: 2px; }
+.draft-field span { font-size: 11px; font-weight: 700; color: var(--ink-2); }
+.draft-field input { min-height: 34px; padding: 4px 8px; text-align: right; }
+.draft-sum { text-align: right; font-weight: 700; }
+@media (max-width: 560px) {
+  .draft-row { grid-template-columns: 5em 6.5em minmax(0, 1fr) auto; }
+  .draft-title { grid-column: 1 / -1; }
+}
+.inline-field { display: inline-flex; align-items: center; gap: 6px; font-size: var(--step--1); font-weight: 700; color: var(--ink-2); }
+.inline-field input { width: auto; min-height: 36px; }
 
 /* API */
 pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); border-radius: var(--radius-sm); overflow-x: auto; font-family: var(--font-mono); font-size: var(--step--1); line-height: 1.5; }

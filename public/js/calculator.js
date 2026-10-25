@@ -1,18 +1,20 @@
 // Kostenrechner: Modell (STL/3MF) hochladen oder einen Druck aus dem Verlauf
-// übernehmen, Rolle wählen, Preis mit Strom, Abnutzung und Gewinn ablesen.
-// Die Datei bleibt im Browser.
+// übernehmen, Rolle wählen, Preis mit allen Posten ablesen und zum Beleg
+// hinzufügen. Die Datei bleibt im Browser.
 import {
-  densityOf, energyCost, estimateGrams, matchSpool, parseDuration, priceQuote, pricePerGram, spoolLabel, weightPatch,
+  densityOf, estimateGrams, matchSpool, parseDuration, priceQuote, pricePerGram, spoolLabel, weightPatch,
 } from './domain.js';
 import { parseModelFile } from './model.js';
-import { saleDialog } from './sales.js';
+import { addPosition, draftTotals, loadDraft } from './sales.js';
 import {
-  esc, fmt, fmtDuration, fmtEur, fmtNum, ring, toast,
+  esc, fmt, fmtCt, fmtDuration, fmtEur, fmtNum, patchText, ring, toast,
 } from './ui.js';
 
 const PREFS_KEY = 'filament-lager-rechner';
 const calc = {
-  model: null, job: null, spoolId: '', qty: 1, grams: '', time: '', infill: 15, wall: 0.85, wear: null, profit: null, material: '',
+  model: null, job: null, spoolId: '', qty: 1, grams: '', time: '', infill: 15, wall: 0.85, material: '',
+  // Abweichend von den Einstellungen nur für diese Rechnung; null = Einstellung
+  labor: null, profit: null,
 };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
@@ -29,7 +31,7 @@ const num = (v) => Number(String(v).replace(',', '.'));
 const pct = (v) => fmtNum(v, Number.isInteger(v) ? 0 : 1);
 const hm = (seconds) => `${Math.floor(seconds / 3600)}:${String(Math.round((seconds % 3600) / 60)).padStart(2, '0')}`;
 
-let ctx = null; // { root, app, spoolUpdated }
+let ctx = null; // { root, app, spoolUpdated, go }
 
 // Einen Druck aus dem Verlauf in den Rechner übernehmen (vor dem Wechsel zum Reiter).
 export function openJob(job, spools) {
@@ -40,10 +42,10 @@ export function openJob(job, spools) {
   });
 }
 
-export function renderCalculator(root, app, { spoolUpdated }) {
-  ctx = { root, app, spoolUpdated };
-  if (calc.wear === null) calc.wear = app.settings.wearPct;
-  if (calc.profit === null) calc.profit = app.settings.profitPct;
+export function renderCalculator(root, app, { spoolUpdated, go }) {
+  ctx = {
+    root, app, spoolUpdated, go,
+  };
   if (calc.spoolId && !app.spools.some((s) => s.id === calc.spoolId)) calc.spoolId = '';
   root.innerHTML = `
     <section class="calc">
@@ -139,13 +141,16 @@ function bind() {
     if (!b) return;
     if (b.dataset.calc === 'copy') copyOffer();
     if (b.dataset.calc === 'book') bookPrint();
-    if (b.dataset.calc === 'sell') sell();
+    if (b.dataset.calc === 'add') addToReceipt();
+    if (b.dataset.calc === 'receipt') ctx.go('drucke');
     if (b.dataset.calc === 'save-price') savePrice();
   });
   result.addEventListener('input', (e) => {
-    if (e.target.id === 'calc-wear') calc.wear = num(e.target.value) || 0;
-    if (e.target.id === 'calc-profit') calc.profit = num(e.target.value) || 0;
-    if (e.target.id === 'calc-wear' || e.target.id === 'calc-profit') updateResult(false);
+    const key = { 'calc-labor': 'labor', 'calc-profit': 'profit' }[e.target.id];
+    if (!key) return;
+    const v = num(e.target.value);
+    calc[key] = e.target.value.trim() === '' || !Number.isFinite(v) ? null : Math.max(0, v);
+    updateResult(false);
   });
 }
 
@@ -244,18 +249,30 @@ function printSeconds() {
   return 0;
 }
 
+// Abweichungen von den Einstellungen, die mit in den Beleg gehen.
+function overrides() {
+  const o = {};
+  if (calc.labor !== null) o.laborMinutes = calc.labor;
+  if (calc.profit !== null) o.profitPct = calc.profit;
+  return o;
+}
+
 function quote() {
   const g = gramsPerPiece();
   if (!g) return null;
   const spool = selectedSpool();
-  const settings = ctx.app.settings;
-  const perGram = pricePerGram(spool, settings);
+  const rates = { ...ctx.app.settings, ...overrides() };
+  const perGram = pricePerGram(spool, rates);
   const seconds = printSeconds();
   return {
-    ...priceQuote({ grams: g.grams, perGram, energy: energyCost(seconds, settings), wearPct: calc.wear, profitPct: calc.profit, qty: calc.qty }),
-    perGram, spool, seconds, source: g.source,
+    ...priceQuote({
+      grams: g.grams, perGram, seconds, qty: calc.qty,
+    }, rates),
+    perGram, spool, source: g.source, rates,
   };
 }
+
+const decimal = (v) => esc(String(v).replace('.', ','));
 
 // full: auch die Eingabefelder neu zeichnen (nicht beim Tippen darin).
 function updateResult(full = true) {
@@ -264,25 +281,28 @@ function updateResult(full = true) {
   // Am Handy steht der Preis unten in einer festen Leiste.
   const bar = ctx.root.querySelector('#calc-bar');
   bar.hidden = !q;
-  if (q) bar.innerHTML = `<span>${q.qty > 1 ? `${q.qty} Stück` : 'Preis pro Stück'}${q.spool ? ` · #${q.spool.nr} ${esc(q.spool.colorName || '')}` : ''}</span><strong>${fmtEur(q.qty > 1 ? q.total : q.piece)}</strong>`;
+  if (q) bar.innerHTML = `<span>${q.qty > 1 ? `${q.qty} Stück` : 'Preis pro Stück'}${q.spool ? ` · #${q.spool.nr} ${esc(q.spool.colorName || '')}` : ''}</span><strong>${fmtEur(q.qty > 1 ? q.sum : q.piece)}</strong>`;
   if (!q) {
     el.innerHTML = `<div class="panel-head"><h2>3. Preis</h2></div>
       <p class="muted">Lade ein Modell hoch, übernimm einen Druck aus dem Verlauf oder trage die Gramm von Hand ein, dann steht hier der Preis.</p>`;
     return;
   }
-  const settings = ctx.app.settings;
+  const { rates } = q;
   const s = q.spool;
   const missingPrice = s && s.price === null;
-  const priceNote = s && s.price !== null ? `Kaufpreis ${fmtEur(s.price)} für ${fmt(s.purchaseWeight)} g` : `Standardpreis ${fmtEur(settings.pricePerKg)} pro kg`;
-  const powerText = q.seconds
-    ? `Strom ${fmtNum(q.seconds / 3600, 2)} Std. × ${fmt(settings.printerWatts)} W × ${fmtNum(settings.energyPrice * 100, 0)} ct/kWh`
-    : 'Strom (Druckzeit fehlt)';
-  const rows = `
-    <div class="calc-line"><span>Filament ${fmtNum(q.grams)} g × ${fmtNum(q.perGram * 100, 2)} ct/g</span><span class="num" data-k="material">${fmtEur(q.material)}</span></div>
-    <div class="calc-line"><span>${powerText}</span><span class="num" data-k="energy">${fmtEur(q.energy)}</span></div>
-    <div class="calc-line"><span>+ Abnutzung <input id="calc-wear" class="pct" inputmode="decimal" value="${esc(String(calc.wear).replace('.', ','))}" aria-label="Abnutzung in Prozent"> %</span><span class="num" data-k="wear">${fmtEur(q.wear)}</span></div>
-    <div class="calc-line sum"><span>Selbstkosten</span><span class="num" data-k="cost">${fmtEur(q.cost)}</span></div>
-    <div class="calc-line"><span>+ Gewinn <input id="calc-profit" class="pct" inputmode="decimal" value="${esc(String(calc.profit).replace('.', ','))}" aria-label="Gewinn in Prozent"> %</span><span class="num" data-k="profit">${fmtEur(q.profit)}</span></div>`;
+  const priceNote = s && s.price !== null ? `Kaufpreis ${fmtEur(s.price)} für ${fmt(s.purchaseWeight)} g` : `Standardpreis ${fmtEur(rates.pricePerKg)} pro kg`;
+  const h = fmtNum(q.hours, 2);
+  const noTime = '<small class="muted">Druckzeit fehlt</small>';
+  const line = (k, label, value, cls = '') => `<div class="calc-line ${cls}"><span>${label}</span><span class="num" data-k="${k}">${fmtEur(value)}</span></div>`;
+  const rows = [
+    line('filament', `Filament <small class="muted">${fmtNum(q.grams)} g × ${fmtNum(q.perGram * 100, 2)} ct/g</small>`, q.filament),
+    line('energy', `Strom <small class="muted">${q.seconds ? `${h} Std. × ${fmt(rates.printerWatts)} W × ${fmtCt(rates.energyPrice)} ct/kWh` : ''}</small>${q.seconds ? '' : ' ' + noTime}`, q.energy),
+    line('machine', `Drucker <small class="muted">${q.seconds ? `${h} Std. × ${fmtEur(rates.machineRate)} Abnutzung` : ''}</small>${q.seconds ? '' : ' ' + noTime}`, q.machine),
+    line('failure', `Fehldrucke <small class="muted">${fmtNum(rates.failPct, 0)} % auf Filament und Strom</small>`, q.failure),
+    `<div class="calc-line"><span>Arbeit <input id="calc-labor" class="pct" inputmode="decimal" value="${decimal(rates.laborMinutes)}" aria-label="Arbeitszeit in Minuten"> Min. × ${fmtEur(rates.laborRate)}/Std.<small class="muted" data-row="labor-split" ${q.qty > 1 ? '' : 'hidden'}>, geteilt durch ${q.qty}</small></span><span class="num" data-k="labor">${fmtEur(q.labor)}</span></div>`,
+    line('cost', 'Selbstkosten', q.cost, 'sum'),
+    `<div class="calc-line"><span>Gewinn <input id="calc-profit" class="pct" inputmode="decimal" value="${decimal(rates.profitPct)}" aria-label="Gewinn in Prozent"> %</span><span class="num" data-k="profit">${fmtEur(q.profit)}</span></div>`,
+  ].join('');
   const need = q.totalGrams;
   let stock = '';
   if (s) {
@@ -292,31 +312,26 @@ function updateResult(full = true) {
       ? `<div class="note">Rolle #${s.nr} hat ${fmt(s.netWeight)} g, danach bleiben ${fmt(rest)} g.</div>`
       : `<div class="note warn">Rolle #${s.nr} reicht nicht, es fehlen ${fmt(-rest)} g.${others.length ? ` Gleiche Farbe: ${others.map((x) => `#${x.nr} (${fmt(x.netWeight)} g)`).join(', ')}.` : ''}</div>`;
   }
+  const draft = loadDraft();
+  const open = draft.positions.length ? draftTotals(draft, ctx.app.settings) : null;
   const html = `<div class="panel-head"><h2>3. Preis</h2><p>${esc(q.source)}</p></div>
     ${s ? `<div class="spool">${ring(s.colorHex, s.purchaseWeight ? s.netWeight / s.purchaseWeight : 0)}<div class="txt"><div class="title">${esc(spoolLabel(s))}</div><div class="sub">${esc(priceNote)}</div></div></div>`
     : `<p class="small muted">Noch keine Rolle gewählt, gerechnet wird mit dem ${esc(priceNote)}.</p>`}
-    ${missingPrice ? `<div class="note warn price-ask"><span>Für Rolle #${s.nr} fehlt der Kaufpreis, gerechnet wird mit ${fmtEur(settings.pricePerKg)} pro kg. Was hast du für die Rolle bezahlt?</span>
+    ${missingPrice ? `<div class="note warn price-ask"><span>Für Rolle #${s.nr} fehlt der Kaufpreis, gerechnet wird mit ${fmtEur(rates.pricePerKg)} pro kg. Was hast du für die Rolle bezahlt?</span>
       <span class="copy-row"><input id="calc-spool-price" inputmode="decimal" placeholder="Kaufpreis in €" aria-label="Kaufpreis der Rolle in Euro"><button class="btn small" type="button" data-calc="save-price">Speichern</button></span></div>` : ''}
     <div class="calc-lines">${rows}</div>
     <div class="calc-total"><span>Preis pro Stück</span><strong class="num" data-k="piece">${fmtEur(q.piece)}</strong></div>
-    ${q.qty > 1 ? `<div class="calc-line sum"><span>${q.qty} Stück, ${fmtNum(need)} g</span><span class="num" data-k="total">${fmtEur(q.total)}</span></div>` : ''}
+    <div class="calc-line sum" data-row="sum" ${q.qty > 1 ? '' : 'hidden'}><span>${q.qty} Stück, ${fmtNum(need)} g</span><span class="num" data-k="sum">${fmtEur(q.sum)}</span></div>
+    <div class="note" data-row="min" ${q.minExtra > 0 ? '' : 'hidden'}>Mindestpreis ${fmtEur(rates.minPrice)} pro Beleg: Allein auf einem Beleg kostet das <strong data-k="min-total">${fmtEur(q.total)}</strong>. Mit weiteren Teilen auf dem Beleg entfällt der Aufschlag.</div>
     ${stock}
     <div class="actions">
-      <button class="btn primary" type="button" data-calc="sell">Verkauf eintragen</button>
+      <button class="btn primary" type="button" data-calc="add">Zum Beleg hinzufügen</button>
       <button class="btn" type="button" data-calc="copy">Angebot kopieren</button>
       ${s ? `<button class="btn" type="button" data-calc="book">${fmtNum(need)} g von #${s.nr} abziehen</button>` : ''}
-    </div>`;
-  if (full) {
-    el.innerHTML = html;
-    return;
-  }
-  // Beim Tippen in die Prozentfelder nur die Beträge tauschen, damit der Fokus bleibt.
-  const tmp = document.createElement('div');
-  tmp.innerHTML = html;
-  for (const fresh of tmp.querySelectorAll('[data-k]')) {
-    const old = el.querySelector(`[data-k="${fresh.dataset.k}"]`);
-    if (old) old.textContent = fresh.textContent;
-  }
+    </div>
+    ${open ? `<p class="small muted">Offener Beleg: ${draft.positions.length} ${draft.positions.length === 1 ? 'Position' : 'Positionen'}, ${fmtEur(open.total)}. <button type="button" class="link" data-calc="receipt">Zum Beleg</button></p>` : ''}`;
+  if (full) el.innerHTML = html;
+  else patchText(el, html);
 }
 
 function offerText() {
@@ -328,7 +343,8 @@ function offerText() {
     `Filament: ${fmtNum(q.grams)} g pro Stück`,
     q.seconds ? `Druckzeit: ${fmtDuration(q.seconds)} pro Stück` : '',
     `Preis pro Stück: ${fmtEur(q.piece)}`,
-    q.qty > 1 ? `${q.qty} Stück: ${fmtEur(q.total)}` : '',
+    q.qty > 1 ? `${q.qty} Stück: ${fmtEur(q.sum)}` : '',
+    q.minExtra > 0 ? `Mindestpreis pro Auftrag: ${fmtEur(q.total)}` : '',
   ];
   return lines.filter(Boolean).join('\n');
 }
@@ -347,13 +363,16 @@ async function copyOffer() {
   }
 }
 
-function sell() {
+function addToReceipt() {
   const q = quote();
   const title = calc.job ? calc.job.title : calc.model ? calc.model.name.replace(/\.(gcode\.)?(stl|3mf)$/i, '') : 'Druck';
-  saleDialog(ctx.app, {
-    title, qty: q.qty, unitPrice: q.piece, unitCost: q.cost, grams: q.totalGrams, spoolNr: q.spool ? q.spool.nr : null,
+  const draft = addPosition({
+    title, qty: q.qty, grams: q.grams, seconds: q.seconds, perGram: q.perGram, overrides: overrides(), spool: q.spool,
     taskId: calc.job ? calc.job.id : '',
   });
+  const { total } = draftTotals(draft, ctx.app.settings);
+  toast(`Zum Beleg hinzugefügt: ${draft.positions.length} ${draft.positions.length === 1 ? 'Position' : 'Positionen'}, ${fmtEur(total)}. Erstellen unter „Drucke“.`);
+  updateResult();
 }
 
 async function savePrice() {

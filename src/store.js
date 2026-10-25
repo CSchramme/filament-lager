@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  assignNumbers, normalizeSale, normalizeSettings, normalizeSpool, placeList,
+  assignNumbers, nextReceiptNr, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, placeList,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 
@@ -51,11 +51,15 @@ export class Store {
       this.data.apiKey = raw.apiKey || '';
       this.data.tasks = Array.isArray(raw.tasks) ? raw.tasks : [];
       this.data.sales = (Array.isArray(raw.sales) ? raw.sales : []).map((x) => normalizeSale(x));
+      this.data.receiptSeq = raw.receiptSeq || {};
+      // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
+      for (const sale of [...this.data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(this.data, sale.date);
+      this.data.powerPayments = (Array.isArray(raw.powerPayments) ? raw.powerPayments : []).map((x) => normalizePowerPayment(x));
       assignNumbers(this.data);
       this.data.settings.places = placeList(this.data.settings, this.data.spools);
     } else {
       this.data = {
-        version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '', tasks: [], sales: [],
+        version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '', tasks: [], sales: [], receiptSeq: {}, powerPayments: [],
       };
       await this.save();
     }

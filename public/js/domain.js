@@ -68,10 +68,18 @@ export function defaultSettings() {
     amsUnits: 1,
     // Kostenrechner: Preis ohne eigenen Rollenpreis, Zuschläge in Prozent
     pricePerKg: 20,
-    wearPct: 5,
-    profitPct: 10,
     energyPrice: 0.3, // € pro kWh
     printerWatts: 120, // mittlere Leistung beim Drucken
+    machineRate: 0.3, // € pro Druckstunde für Abnutzung, Düsen, Platten, Ersatzteile
+    failPct: 10, // Zuschlag für Fehldrucke auf Filament und Strom
+    laborRate: 15, // € pro Arbeitsstunde
+    laborMinutes: 5, // Arbeitszeit pro Auftrag: slicen, abnehmen, nacharbeiten, verpacken
+    profitPct: 30,
+    minPrice: 3, // Mindestpreis pro Beleg
+    powerPayee: 'Papa', // wer den Strom bezahlt
+    sellerName: '',
+    sellerAddress: '',
+    smallBusiness: false, // Hinweis § 19 UStG auf dem Beleg
     places: [],
   };
 }
@@ -97,6 +105,13 @@ function toMoney(v) {
   if (v === '' || v === null || v === undefined) return null;
   const n = Number(String(v).replace(/\s|€/g, '').replace(',', '.'));
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+}
+
+// Wie toMoney, aber mit mehr Stellen (Strompreise wie 0,3187 € pro kWh)
+function toRate(v) {
+  if (v === '' || v === null || v === undefined) return null;
+  const n = Number(String(v).replace(/\s|€/g, '').replace(',', '.'));
+  return Number.isFinite(n) ? Math.round(n * 10000) / 10000 : null;
 }
 
 function toBool(v, fallback) {
@@ -188,15 +203,27 @@ export function normalizeSettings(input) {
     .map((t) => ({ id: str(t && t.id) || newId(), name: str(t && t.name), tare: Math.max(0, toInt(t && t.tare, 0)) }))
     .filter((t) => t.name && !seen.has(t.id) && seen.add(t.id));
   const places = [...new Set((Array.isArray(src.places) ? src.places : []).map(str).filter(Boolean))];
+  // Einstellungen aus der Zeit vor der neuen Preisrechnung (mit Abnutzung in %):
+  // der alte Standardgewinn von 10 % wird zu 30 %, eigene Werte bleiben.
+  const legacy = 'wearPct' in src && !('machineRate' in src);
+  const profitPct = legacy && toMoney(src.profitPct) === 10 ? 30 : toMoney(src.profitPct);
   return {
     spoolTypes: spoolTypes.length ? spoolTypes : base.spoolTypes,
     lowStockPart: Math.min(20, Math.max(2, toInt(src.lowStockPart, base.lowStockPart))),
     amsUnits: Math.min(4, Math.max(1, toInt(src.amsUnits, base.amsUnits))),
     pricePerKg: Math.max(0, toMoney(src.pricePerKg) ?? base.pricePerKg),
-    wearPct: Math.max(0, toMoney(src.wearPct) ?? base.wearPct),
-    profitPct: Math.max(0, toMoney(src.profitPct) ?? base.profitPct),
-    energyPrice: Math.max(0, toMoney(src.energyPrice) ?? base.energyPrice),
+    energyPrice: Math.max(0, toRate(src.energyPrice) ?? base.energyPrice),
     printerWatts: Math.max(0, toInt(src.printerWatts, base.printerWatts)),
+    machineRate: Math.max(0, toMoney(src.machineRate) ?? base.machineRate),
+    failPct: Math.max(0, toMoney(src.failPct) ?? base.failPct),
+    laborRate: Math.max(0, toMoney(src.laborRate) ?? base.laborRate),
+    laborMinutes: Math.max(0, toMoney(src.laborMinutes) ?? base.laborMinutes),
+    profitPct: Math.max(0, profitPct ?? base.profitPct),
+    minPrice: Math.max(0, toMoney(src.minPrice) ?? base.minPrice),
+    powerPayee: str(src.powerPayee) || base.powerPayee,
+    sellerName: str(src.sellerName),
+    sellerAddress: String(src.sellerAddress ?? '').trim(),
+    smallBusiness: toBool(src.smallBusiness, base.smallBusiness),
     places,
   };
 }
@@ -271,7 +298,8 @@ export function matchSpool(spools, { color, type, slot } = {}) {
 }
 
 // Kosten eines Drucks mit einem oder mehreren Filamenten (z. B. aus dem Druckverlauf).
-export function jobQuote(job, spools, settings, { wearPct = settings.wearPct, profitPct = settings.profitPct, qty = 1 } = {}) {
+// Jede Farbe kostet den Grammpreis ihrer passenden Lagerrolle.
+export function jobQuote(job, spools, settings, { qty = 1, overrides = {} } = {}) {
   const list = job.filaments && job.filaments.length ? job.filaments : [{ grams: job.grams }];
   const parts = list.map((f) => {
     const spool = f.color ? matchSpool(spools, f) : null;
@@ -281,15 +309,19 @@ export function jobQuote(job, spools, settings, { wearPct = settings.wearPct, pr
   const material = parts.reduce((a, p) => a + p.grams * p.perGram, 0);
   const perGram = grams ? material / grams : settings.pricePerKg / 1000;
   return {
-    ...priceQuote({ grams, perGram, energy: energyCost(job.seconds || 0, settings), wearPct, profitPct, qty }),
+    ...priceQuote({ grams, perGram, seconds: job.seconds || 0, qty }, { ...settings, ...overrides }),
     perGram,
     parts,
   };
 }
 
-// Stromkosten für eine Druckzeit in Sekunden.
+// Stromverbrauch und -kosten für eine Druckzeit in Sekunden.
+export function energyKwh(seconds, settings) {
+  return (seconds / 3600) * (settings.printerWatts / 1000);
+}
+
 export function energyCost(seconds, settings) {
-  return (seconds / 3600) * (settings.printerWatts / 1000) * settings.energyPrice;
+  return energyKwh(seconds, settings) * settings.energyPrice;
 }
 
 // "1:24" (Std:Min), "1,5" (Stunden) oder "90m" -> Sekunden; leer/ungültig -> null
@@ -305,52 +337,186 @@ export function parseDuration(text) {
   return null;
 }
 
-// Filament und Strom sind die Grundkosten. Abnutzung auf die Grundkosten,
-// Gewinn auf die Selbstkosten. Jeder Posten wird auf Cent gerundet, damit die
-// angezeigten Beträge aufgehen.
-export function priceQuote({ grams, perGram, energy = 0, wearPct, profitPct, qty = 1 }) {
-  const cents = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
-  const material = cents(grams * perGram);
-  const power = cents(energy);
-  const base = cents(material + power);
-  const wear = cents(base * (wearPct / 100));
-  const cost = cents(base + wear);
-  const profit = cents(cost * (profitPct / 100));
+const cents = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
+
+// Preis pro Teil. rates kommt aus den Einstellungen (einzelne Werte lassen
+// sich im Rechner überschreiben):
+//   Filament   = Gramm × Grammpreis der Rolle
+//   Strom      = Druckzeit × Leistung × Strompreis
+//   Drucker    = Druckzeit × Stundensatz (Abnutzung, Düsen, Platten, Ersatzteile)
+//   Fehldrucke = Zuschlag in % auf Filament + Strom
+//   Arbeit     = Arbeitszeit pro Auftrag × Stundenlohn, verteilt auf die Stückzahl
+//   Gewinn     = % auf die Selbstkosten
+// Jeder Posten wird auf Cent gerundet, damit die Beträge aufgehen. Der
+// Mindestpreis gilt für den ganzen Auftrag (minTotal).
+export function priceQuote({ grams, perGram, seconds = 0, qty = 1 }, rates) {
+  const hours = seconds / 3600;
+  const filament = cents(grams * perGram);
+  const energy = cents(hours * (rates.printerWatts / 1000) * rates.energyPrice);
+  const machine = cents(hours * rates.machineRate);
+  const failure = cents((filament + energy) * (rates.failPct / 100));
+  const laborOrder = cents((rates.laborMinutes / 60) * rates.laborRate);
+  const labor = cents(laborOrder / qty);
+  const cost = cents(filament + energy + machine + failure + labor);
+  const profit = cents(cost * (rates.profitPct / 100));
   const piece = cents(cost + profit);
+  const sum = cents(piece * qty);
+  const total = Math.max(sum, cents(rates.minPrice || 0));
   return {
-    grams, material, energy: power, base, wear, cost, profit, piece, qty, total: cents(piece * qty), totalGrams: grams * qty,
+    grams, seconds, qty, hours, kwh: energyKwh(seconds, rates),
+    filament, energy, machine, failure, labor, laborOrder, cost, profit, piece,
+    sum, total, minExtra: cents(total - sum), totalGrams: grams * qty,
   };
 }
 
 // ---------------------------------------------------------------------------
-// Verkäufe
+// Belege (Verkäufe). Ein Beleg hat eine oder mehrere Positionen; jede Position
+// trägt die Aufteilung ihres Preises pro Teil.
+
+const BREAKDOWN_KEYS = ['filament', 'energy', 'machine', 'failure', 'labor', 'cost', 'profit', 'piece'];
+
+export function normalizeSaleItem(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const qty = Math.max(1, toInt(src.qty, 1));
+  let breakdown = null;
+  if (src.breakdown && typeof src.breakdown === 'object') {
+    breakdown = Object.fromEntries(BREAKDOWN_KEYS.map((k) => [k, Math.max(0, toMoney(src.breakdown[k]) ?? 0)]));
+  }
+  const piece = breakdown ? breakdown.piece : null;
+  return {
+    title: str(src.title) || 'Druck',
+    qty,
+    grams: Math.max(0, Math.round((Number(src.grams) || 0) * 10) / 10), // pro Stück
+    seconds: Math.max(0, Math.round(Number(src.seconds) || 0)), // pro Stück
+    spoolNr: toInt(src.spoolNr, null),
+    material: str(src.material),
+    colorName: str(src.colorName),
+    colorHex: normHex(src.colorHex),
+    taskId: str(src.taskId),
+    breakdown,
+    // Beträge für alle Stück dieser Position
+    price: piece !== null ? cents(piece * qty) : Math.max(0, toMoney(src.price) ?? 0),
+    cost: breakdown ? cents(breakdown.cost * qty) : Math.max(0, toMoney(src.cost) ?? 0),
+    energy: breakdown ? cents(breakdown.energy * qty) : Math.max(0, toMoney(src.energy) ?? 0),
+  };
+}
 
 export function normalizeSale(input, { now = new Date().toISOString() } = {}) {
   const src = input && typeof input === 'object' ? input : {};
-  const qty = Math.max(1, toInt(src.qty, 1));
+  // Ältere Verkäufe ohne Positionen werden zu einem Beleg mit einer Position.
+  const items = (Array.isArray(src.items) && src.items.length ? src.items : [{
+    title: src.title, qty: src.qty, price: src.price, cost: src.cost, grams: (Number(src.grams) || 0) / Math.max(1, toInt(src.qty, 1)),
+    spoolNr: src.spoolNr, taskId: src.taskId,
+  }]).map(normalizeSaleItem);
+  const sumItems = cents(items.reduce((a, i) => a + i.price, 0));
+  const minExtra = Math.max(0, toMoney(src.minExtra) ?? 0);
   return {
     id: str(src.id) || newId(),
+    nr: str(src.nr), // Belegnummer, z. B. 2026-007
     date: str(src.date) || now.slice(0, 10),
-    title: str(src.title) || 'Druck',
-    qty,
-    price: Math.max(0, toMoney(src.price) ?? 0), // erhaltener Betrag für alle Stück
-    cost: Math.max(0, toMoney(src.cost) ?? 0), // Selbstkosten für alle Stück
-    grams: Math.max(0, Math.round(Number(src.grams) || 0)),
-    spoolNr: toInt(src.spoolNr, null),
-    taskId: str(src.taskId),
     customer: str(src.customer),
     note: str(src.note),
+    items,
+    minExtra, // Aufschlag auf den Mindestpreis
+    // Sätze beim Erstellen, damit der Beleg später gleich aussieht
+    rates: src.rates && typeof src.rates === 'object' ? {
+      energyPrice: Math.max(0, toRate(src.rates.energyPrice) ?? 0),
+      printerWatts: Math.max(0, toInt(src.rates.printerWatts, 0)),
+      machineRate: Math.max(0, toMoney(src.rates.machineRate) ?? 0),
+      failPct: Math.max(0, toMoney(src.rates.failPct) ?? 0),
+    } : null,
+    title: items.length > 1 ? `${items[0].title} + ${items.length - 1} weitere` : items[0].title,
+    qty: items.reduce((a, i) => a + i.qty, 0),
+    price: cents(sumItems + minExtra),
+    cost: cents(items.reduce((a, i) => a + i.cost, 0)),
+    energy: cents(items.reduce((a, i) => a + i.energy, 0)),
     createdAt: str(src.createdAt) || now,
   };
 }
 
+// Nächste Belegnummer im Jahr des Belegs: 2026-001, 2026-002, …
+export function nextReceiptNr(data, date) {
+  const year = str(date).slice(0, 4) || new Date().toISOString().slice(0, 4);
+  data.receiptSeq = data.receiptSeq && typeof data.receiptSeq === 'object' ? data.receiptSeq : {};
+  data.receiptSeq[year] = (toInt(data.receiptSeq[year], 0) || 0) + 1;
+  return `${year}-${String(data.receiptSeq[year]).padStart(3, '0')}`;
+}
+
 export function salesSummary(sales, { month = new Date().toISOString().slice(0, 7) } = {}) {
   const sum = (list) => {
-    const revenue = list.reduce((a, s) => a + s.price, 0);
-    const cost = list.reduce((a, s) => a + s.cost, 0);
-    return { count: list.length, pieces: list.reduce((a, s) => a + s.qty, 0), revenue, cost, profit: revenue - cost };
+    const revenue = cents(list.reduce((a, s) => a + s.price, 0));
+    const cost = cents(list.reduce((a, s) => a + s.cost, 0));
+    return { count: list.length, pieces: list.reduce((a, s) => a + s.qty, 0), revenue, cost, profit: cents(revenue - cost) };
   };
   return { total: sum(sales), month: sum(sales.filter((s) => s.date.startsWith(month))) };
+}
+
+// ---------------------------------------------------------------------------
+// Stromabrechnung: Strom aller Drucke seit der letzten Abrechnung.
+
+export function normalizePowerPayment(input, { now = new Date().toISOString() } = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  return {
+    id: str(src.id) || newId(),
+    date: str(src.date) || now.slice(0, 10),
+    from: str(src.from),
+    to: str(src.to) || now,
+    prints: Math.max(0, toInt(src.prints, 0)),
+    hours: Math.max(0, Number(src.hours) || 0),
+    kwh: Math.max(0, Number(src.kwh) || 0),
+    amount: Math.max(0, toMoney(src.amount) ?? 0),
+    // Gerechnet mit diesen Werten; die Zeilen bleiben für die Abrechnung erhalten.
+    energyPrice: Math.max(0, toRate(src.energyPrice) ?? 0),
+    printerWatts: Math.max(0, toInt(src.printerWatts, 0)),
+    rows: (Array.isArray(src.rows) ? src.rows : []).slice(0, 1000).map((r) => ({
+      date: str(r && r.date),
+      title: str(r && r.title),
+      seconds: Math.max(0, Math.round(Number(r && r.seconds) || 0)),
+      status: toInt(r && r.status, 0),
+      kwh: Math.max(0, Number(r && r.kwh) || 0),
+      amount: Math.max(0, toMoney(r && r.amount) ?? 0),
+    })),
+    note: str(src.note),
+  };
+}
+
+// Stromkosten der Drucke zwischen "since" und "until" (Standard: seit der
+// letzten Abrechnung bis jetzt). Quelle ist der Druckverlauf, ohne ihn die Belege.
+export function openPower({
+  tasks = [], sales = [], payments = [], settings, since, until, now = new Date().toISOString(),
+}) {
+  const last = [...payments].sort((a, b) => b.to.localeCompare(a.to))[0];
+  const from = since || (last ? last.to : `${now.slice(0, 7)}-01T00:00:00.000Z`);
+  const to = until || now;
+  const t0 = Date.parse(from) || 0;
+  const t1 = Date.parse(to) || Infinity;
+  const inRange = (iso) => {
+    const t = Date.parse(iso) || 0;
+    return t >= t0 && t < t1;
+  };
+  const rows = tasks.length
+    ? tasks.filter((t) => t.seconds > 0 && inRange(t.startTime))
+      .map((t) => ({ date: t.startTime, title: t.title, seconds: t.seconds, status: t.status }))
+    : sales.filter((s) => inRange(s.createdAt))
+      .flatMap((s) => s.items.filter((i) => i.seconds).map((i) => ({
+        date: s.createdAt, title: i.qty > 1 ? `${i.title} × ${i.qty}` : i.title, seconds: i.seconds * i.qty, status: 2,
+      })));
+  const list = rows.map((r) => ({ ...r, kwh: energyKwh(r.seconds, settings), amount: cents(energyCost(r.seconds, settings)) }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const seconds = list.reduce((a, r) => a + r.seconds, 0);
+  return {
+    from,
+    to,
+    rows: list,
+    prints: list.length,
+    hours: seconds / 3600,
+    kwh: list.reduce((a, r) => a + r.kwh, 0),
+    // Summe der gerundeten Zeilen, damit die Abrechnung aufgeht
+    amount: cents(list.reduce((a, r) => a + r.amount, 0)),
+    energyPrice: settings.energyPrice,
+    printerWatts: settings.printerWatts,
+    source: tasks.length ? 'verlauf' : 'belege',
+  };
 }
 
 // Neues Restgewicht aus genau einer Angabe: net (Restgewicht), gross (mit

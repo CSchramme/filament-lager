@@ -1,7 +1,8 @@
 // HTTP-Schnittstelle des Filament-Lagers und Auslieferung der Weboberfläche.
 import express from 'express';
 import {
-  colorNameFor, newId, normalizeSale, normalizeSettings, normalizeSpool, planMove, planPlaces, salesSummary,
+  colorNameFor, newId, nextReceiptNr, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, planMove,
+  planPlaces, salesSummary,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import {
@@ -335,6 +336,7 @@ export function createApp({
 
   app.post('/api/verkaeufe', async (req, res) => {
     const sale = normalizeSale({ ...(req.body || {}), id: undefined, createdAt: undefined });
+    sale.nr = nextReceiptNr(store.data, sale.date);
     store.data.sales.unshift(sale);
     await store.save();
     res.status(201).json({ sale, ...salesView() });
@@ -344,7 +346,7 @@ export function createApp({
     const idx = store.data.sales.findIndex((x) => x.id === req.params.id);
     if (idx < 0) throw new HttpError(404, 'Verkauf nicht gefunden.');
     const old = store.data.sales[idx];
-    store.data.sales[idx] = normalizeSale({ ...old, ...(req.body || {}), id: old.id, createdAt: old.createdAt });
+    store.data.sales[idx] = normalizeSale({ ...old, ...(req.body || {}), id: old.id, nr: old.nr, createdAt: old.createdAt });
     await store.save();
     res.json(salesView());
   });
@@ -353,6 +355,22 @@ export function createApp({
     store.data.sales = store.data.sales.filter((x) => x.id !== req.params.id);
     await store.save();
     res.json(salesView());
+  });
+
+  // Stromabrechnungen (wer den Strom bezahlt, bekommt den Betrag).
+  app.get('/api/strom', (req, res) => res.json({ payments: store.data.powerPayments }));
+
+  app.post('/api/strom', async (req, res) => {
+    const payment = normalizePowerPayment({ ...(req.body || {}), id: undefined });
+    store.data.powerPayments.unshift(payment);
+    await store.save();
+    res.status(201).json({ payment, payments: store.data.powerPayments });
+  });
+
+  app.delete('/api/strom/:id', async (req, res) => {
+    store.data.powerPayments = store.data.powerPayments.filter((x) => x.id !== req.params.id);
+    await store.save();
+    res.json({ payments: store.data.powerPayments });
   });
 
   // -- Bambu Cloud ----------------------------------------------------------

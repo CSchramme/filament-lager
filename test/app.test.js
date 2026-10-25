@@ -294,16 +294,45 @@ test('Druckverlauf holen und Verkäufe verwalten', async () => {
   assert.deepEqual(refreshed.body.tasks.map((t) => [t.id, t.title, t.seconds, t.grams]), [['7', 'Halter', 3600, 12.5]]);
   assert.equal((await call('GET', '/api/drucke')).body.tasks.length, 1);
 
-  const added = await call('POST', '/api/verkaeufe', { title: 'Halter', qty: 2, price: '3,50', cost: 1.2, taskId: '7' });
+  const breakdown = { filament: 0.25, energy: 0.04, machine: 0.3, failure: 0.03, labor: 0.63, cost: 1.25, profit: 0.38, piece: 1.63 };
+  const added = await call('POST', '/api/verkaeufe', {
+    date: '2026-10-25', customer: 'Oma', items: [{ title: 'Halter', qty: 2, grams: 12.5, seconds: 3600, breakdown, taskId: '7' }], minExtra: 0,
+  });
   assert.equal(added.status, 201);
-  assert.equal(added.body.summary.total.profit, 2.3);
+  assert.equal(added.body.sale.nr, '2026-001');
+  assert.equal(added.body.sale.price, 3.26);
+  assert.equal(added.body.summary.total.profit, 0.76);
+  const second = await call('POST', '/api/verkaeufe', { date: '2026-10-26', items: [{ title: 'Clip', qty: 1, price: 3 }] });
+  assert.equal(second.body.sale.nr, '2026-002');
   const id = added.body.sale.id;
-  const upd = await call('PUT', '/api/verkaeufe/' + id, { price: 4 });
-  assert.equal(upd.body.sales[0].price, 4);
-  assert.equal(upd.body.sales[0].qty, 2);
+  const upd = await call('PUT', '/api/verkaeufe/' + id, { customer: 'Opa', nr: '1999-999' });
+  const changed = upd.body.sales.find((x) => x.id === id);
+  assert.deepEqual([changed.customer, changed.nr, changed.price, changed.qty], ['Opa', '2026-001', 3.26, 2]);
   const saved = JSON.parse(await fs.readFile(path.join(dir, 'lager.json'), 'utf8'));
-  assert.equal(saved.sales.length, 1);
+  assert.equal(saved.sales.length, 2);
+  assert.deepEqual(saved.receiptSeq, { 2026: 2 });
   assert.equal(saved.tasks.length, 1);
+  await call('DELETE', '/api/verkaeufe/' + second.body.sale.id);
   const del = await call('DELETE', '/api/verkaeufe/' + id);
   assert.equal(del.body.sales.length, 0);
+  // Gelöschte Nummern werden nicht neu vergeben
+  const third = await call('POST', '/api/verkaeufe', { date: '2026-10-27', items: [{ title: 'X', price: 3 }] });
+  assert.equal(third.body.sale.nr, '2026-003');
+  await call('DELETE', '/api/verkaeufe/' + third.body.sale.id);
+});
+
+test('Stromabrechnungen speichern und löschen', async () => {
+  assert.deepEqual((await call('GET', '/api/strom')).body.payments, []);
+  const rows = [{ date: '2026-10-20T10:00:00Z', title: 'Halter', seconds: 3600, status: 2, kwh: 0.12, amount: 0.04 }];
+  const res = await call('POST', '/api/strom', {
+    date: '2026-10-25', from: '2026-10-01T00:00:00Z', to: '2026-10-25T12:00:00Z', prints: 1, hours: 1, kwh: 0.12, amount: '0,04', energyPrice: 0.3, printerWatts: 120, rows, id: 'fremd',
+  });
+  assert.equal(res.status, 201);
+  assert.notEqual(res.body.payment.id, 'fremd');
+  assert.equal(res.body.payment.amount, 0.04);
+  assert.deepEqual(res.body.payment.rows, rows);
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'lager.json'), 'utf8'));
+  assert.equal(saved.powerPayments.length, 1);
+  const del = await call('DELETE', '/api/strom/' + res.body.payment.id);
+  assert.deepEqual(del.body.payments, []);
 });

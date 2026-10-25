@@ -19,8 +19,9 @@ export function taskSummary(t) {
   const end = Date.parse(t.endTime || '') || 0;
   const estimate = Number(t.costTime) || 0;
   const status = Number(t.status) || 0;
-  // Die echte Dauer nur bei fertigen Drucken; endTime kurz nach startTime heißt "läuft noch".
-  const actual = status === 2 && end - start > 60000 ? Math.round((end - start) / 1000) : 0;
+  // Echte Dauer aus Start und Ende; endTime kurz nach startTime heißt "läuft noch".
+  // Ohne echte Dauer bei fertigen Drucken die Schätzung des Slicers.
+  const actual = end - start > 60000 ? Math.round((end - start) / 1000) : 0;
   return {
     id: String(t.id),
     title: String(t.title || t.designTitle || 'Druck'),
@@ -29,7 +30,7 @@ export function taskSummary(t) {
     status,
     startTime: String(t.startTime || ''),
     endTime: String(t.endTime || ''),
-    seconds: actual || estimate,
+    seconds: actual || (status === 2 ? estimate : 0),
     grams: Math.round((Number(t.weight) || 0) * 100) / 100,
     plate: Number(t.plateIndex) || 0,
     deviceId: String(t.deviceId || ''),

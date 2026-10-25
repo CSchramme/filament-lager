@@ -1,67 +1,104 @@
-// Dialog "Verkauf eintragen", genutzt vom Rechner und vom Druckverlauf.
-import { normalizeSale } from './domain.js';
-import {
-  esc, fmtEur, openDialog, toast,
-} from './ui.js';
+// Offener Beleg: Positionen aus dem Rechner und dem Druckverlauf sammeln,
+// Anzahl und Preis anpassen, dann als Verkauf speichern und den Beleg öffnen.
+// Der offene Beleg liegt im Browser, bis er erstellt wird.
+import { newId, priceQuote } from './domain.js';
 
-const money = (v) => String(v.toFixed(2)).replace('.', ',');
-const num = (v) => Number(String(v).replace(/\s|€/g, '').replace(',', '.')) || 0;
+const DRAFT_KEY = 'filament-lager-beleg';
+let memory = null;
 
-// prefill: { title, qty, unitPrice, unitCost, grams, spoolNr, taskId }
-export function saleDialog(app, prefill, onSaved) {
-  const qty0 = Math.max(1, prefill.qty || 1);
-  const unitPrice = prefill.unitPrice || 0;
-  const unitCost = prefill.unitCost || 0;
-  const today = new Date().toISOString().slice(0, 10);
-  openDialog({
-    title: 'Verkauf eintragen',
-    body: `<div class="fields">
-        <label class="field full"><span>Was</span><input name="title" value="${esc(prefill.title || '')}" required></label>
-        <label class="field"><span>Anzahl</span><input name="qty" type="number" inputmode="numeric" min="1" step="1" value="${qty0}"></label>
-        <label class="field"><span>Datum</span><input name="date" type="date" value="${today}"></label>
-        <label class="field"><span>Verkaufspreis gesamt (€)</span><input name="price" inputmode="decimal" value="${money(unitPrice * qty0)}"></label>
-        <label class="field"><span>Kosten gesamt (€)</span><input name="cost" inputmode="decimal" value="${money(unitCost * qty0)}"></label>
-        <label class="field full"><span>Kunde (optional)</span><input name="customer" autocomplete="off"></label>
-        <label class="field full"><span>Notiz (optional)</span><input name="note" autocomplete="off"></label>
-      </div>
-      <div class="note" data-profit></div>`,
-    foot: '<button type="button" class="btn" data-close>Abbrechen</button><span class="spacer"></span><button type="submit" class="btn primary">Verkauf speichern</button>',
-    onReady(dlg, form) {
-      const f = form.elements;
-      const touched = { price: false, cost: false };
-      const show = () => {
-        const profit = num(f.price.value) - num(f.cost.value);
-        dlg.querySelector('[data-profit]').textContent = `Gewinn: ${fmtEur(profit)}`;
-      };
-      f.price.addEventListener('input', () => { touched.price = true; show(); });
-      f.cost.addEventListener('input', () => { touched.cost = true; show(); });
-      // Solange die Beträge nicht von Hand geändert wurden, wachsen sie mit der Anzahl.
-      f.qty.addEventListener('input', () => {
-        const q = Math.max(1, Math.round(num(f.qty.value)) || 1);
-        if (!touched.price) f.price.value = money(unitPrice * q);
-        if (!touched.cost) f.cost.value = money(unitCost * q);
-        show();
-      });
-      show();
-    },
-    async onSubmit(form) {
-      const f = form.elements;
-      if (!f.title.value.trim()) throw new Error('Bitte angeben, was verkauft wurde.');
-      const sale = normalizeSale({
-        title: f.title.value,
-        qty: f.qty.value,
-        date: f.date.value || today,
-        price: f.price.value,
-        cost: f.cost.value,
-        customer: f.customer.value,
-        note: f.note.value,
-        grams: (prefill.grams || 0) * (Math.max(1, Math.round(num(f.qty.value)) || 1) / qty0),
-        spoolNr: prefill.spoolNr,
-        taskId: prefill.taskId,
-      });
-      const res = await app.backend.addSale(sale);
-      toast(`Verkauf gespeichert: ${fmtEur(res.sale.price)}`);
-      if (onSaved) onSaved(res);
-    },
+export function loadDraft() {
+  try {
+    const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+    if (d && Array.isArray(d.positions)) return d;
+  } catch { /* ohne Speicher */ }
+  return memory || { positions: [], customer: '', note: '' };
+}
+
+export function saveDraft(draft) {
+  memory = draft;
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  } catch { /* nur im Arbeitsspeicher */ }
+}
+
+// position: { title, qty, grams, seconds, perGram, overrides, spool, taskId } oder
+// von Hand: { title, qty, manual: true, piecePrice, pieceCost }
+export function addPosition(position) {
+  const draft = loadDraft();
+  const s = position.spool;
+  draft.positions.push({
+    id: newId(),
+    title: position.title || 'Druck',
+    qty: Math.max(1, position.qty || 1),
+    grams: position.grams || 0,
+    seconds: position.seconds || 0,
+    perGram: position.perGram || 0,
+    overrides: position.overrides || {},
+    spoolNr: s ? s.nr : null,
+    material: s ? s.material : '',
+    colorName: s ? s.colorName : '',
+    colorHex: s ? s.colorHex : '',
+    taskId: position.taskId || '',
+    manual: Boolean(position.manual),
+    piecePrice: position.piecePrice ?? null,
+    pieceCost: position.pieceCost ?? 0,
   });
+  saveDraft(draft);
+  return draft;
+}
+
+// Aufteilung pro Teil mit den aktuellen Einstellungen. Der Mindestpreis gilt
+// erst für den ganzen Beleg, deshalb hier ohne.
+export function positionBreakdown(pos, settings) {
+  const cents = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
+  if (pos.manual) {
+    const piece = cents(pos.piecePrice || 0);
+    const cost = cents(pos.pieceCost || 0);
+    return { filament: 0, energy: 0, machine: 0, failure: 0, labor: 0, cost, profit: cents(piece - cost), piece };
+  }
+  const q = priceQuote({ grams: pos.grams, perGram: pos.perGram, seconds: pos.seconds, qty: pos.qty }, { ...settings, ...pos.overrides, minPrice: 0 });
+  const b = {
+    filament: q.filament, energy: q.energy, machine: q.machine, failure: q.failure, labor: q.labor, cost: q.cost, profit: q.profit, piece: q.piece,
+  };
+  if (pos.piecePrice !== null && pos.piecePrice !== undefined) {
+    b.piece = cents(pos.piecePrice);
+    b.profit = cents(b.piece - b.cost);
+  }
+  return b;
+}
+
+export function draftTotals(draft, settings) {
+  const cents = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
+  const lines = draft.positions.map((p) => ({ ...p, breakdown: positionBreakdown(p, settings) }));
+  const sum = cents(lines.reduce((a, p) => a + p.breakdown.piece * p.qty, 0));
+  const minExtra = lines.length ? Math.max(0, cents(settings.minPrice - sum)) : 0;
+  return { lines, sum, minExtra, total: cents(sum + minExtra) };
+}
+
+// Daten für POST /api/verkaeufe
+export function saleFromDraft(draft, settings, { date, customer, note }) {
+  const { lines, minExtra } = draftTotals(draft, settings);
+  return {
+    date,
+    customer,
+    note,
+    minExtra,
+    rates: {
+      energyPrice: settings.energyPrice, printerWatts: settings.printerWatts, machineRate: settings.machineRate, failPct: settings.failPct,
+    },
+    items: lines.map((p) => ({
+      title: p.title,
+      qty: p.qty,
+      grams: p.grams,
+      seconds: p.seconds,
+      spoolNr: p.spoolNr,
+      material: p.material,
+      colorName: p.colorName,
+      colorHex: p.colorHex,
+      taskId: p.taskId,
+      breakdown: p.manual ? null : p.breakdown,
+      price: p.breakdown.piece * p.qty,
+      cost: p.breakdown.cost * p.qty,
+    })),
+  };
 }

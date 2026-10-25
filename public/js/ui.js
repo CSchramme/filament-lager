@@ -118,3 +118,21 @@ export async function readFile(file) {
     return new TextDecoder('windows-1252').decode(buf);
   }
 }
+
+// Nur Beträge austauschen, damit ein Eingabefeld beim Tippen den Fokus behält:
+// Elemente mit data-k bekommen den Text, Elemente mit data-row das hidden.
+export function patchText(el, html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  for (const fresh of tmp.querySelectorAll('[data-k]')) {
+    const old = el.querySelector(`[data-k="${fresh.dataset.k}"]`);
+    if (old) old.textContent = fresh.textContent;
+  }
+  for (const fresh of tmp.querySelectorAll('[data-row]')) {
+    const old = el.querySelector(`[data-row="${fresh.dataset.row}"]`);
+    if (old) old.hidden = fresh.hidden;
+  }
+}
+
+// € pro kWh als Cent-Angabe: 0,3 -> "30", 0,3187 -> "31,87"
+export const fmtCt = (eurPerKwh) => new Intl.NumberFormat('de-DE', { maximumFractionDigits: 2 }).format(eurPerKwh * 100);

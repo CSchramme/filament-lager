@@ -99,7 +99,7 @@ test('Gesliceter 3MF aus Bambu Studio: Gramm und Druckzeit', async () => {
   await assert.rejects(parseModelFile('x.obj', new ArrayBuffer(10)), /STL- oder 3MF/);
 });
 
-test('Gewicht schätzen und Preis mit Abnutzung und Gewinn', () => {
+test('Gewicht schätzen und Preis mit allen Posten', () => {
   assert.equal(densityOf('PETG HF'), 1.27);
   assert.equal(densityOf('Unbekannt'), 1.24);
   // 20-mm-Würfel, 15 % Infill, 0,85 mm Wand: ca. 3,6 g PLA
@@ -110,14 +110,32 @@ test('Gewicht schätzen und Preis mit Abnutzung und Gewinn', () => {
   const spool = normalizeSpool({ purchaseWeight: 1000, price: '24,99' });
   assert.equal(pricePerGram(spool, settings), 0.02499);
   assert.equal(pricePerGram(normalizeSpool({ purchaseWeight: 1000 }), settings), 0.02);
-  // 100 g zu 2 ct: Material 2,00 €, Abnutzung 5 % = 0,10 €, Gewinn 10 % auf 2,10 € = 0,21 €
-  assert.deepEqual(priceQuote({ grams: 100, perGram: 0.02, wearPct: 5, profitPct: 10, qty: 3 }),
-    { grams: 100, material: 2, energy: 0, base: 2, wear: 0.1, cost: 2.1, profit: 0.21, piece: 2.31, qty: 3, total: 6.93, totalGrams: 300 });
-  // Mit Strom: 2 Std. bei 120 W und 0,30 €/kWh = 0,072 € -> 0,07 €; Abnutzung auf Filament + Strom
   const strom = energyCost(7200, settings);
-  assert.ok(Math.abs(strom - 0.072) < 1e-9);
-  assert.deepEqual(priceQuote({ grams: 100, perGram: 0.02, energy: strom, wearPct: 5, profitPct: 10 }),
-    { grams: 100, material: 2, energy: 0.07, base: 2.07, wear: 0.1, cost: 2.17, profit: 0.22, piece: 2.39, qty: 1, total: 2.39, totalGrams: 100 });
+  assert.ok(Math.abs(strom - 0.072) < 1e-9); // 2 Std. × 120 W × 0,30 €/kWh
+
+  // 100 g zu 2 ct, 2 Std.: Filament 2,00 + Strom 0,07 + Drucker 0,60 + Fehldrucke 10 % von 2,07 = 0,21
+  // + Arbeit 5 Min. × 15 €/Std. = 1,25 -> Selbstkosten 4,13; Gewinn 30 % = 1,24; Preis 5,37
+  const pick = (q) => [q.filament, q.energy, q.machine, q.failure, q.labor, q.cost, q.profit, q.piece, q.sum, q.total, q.minExtra];
+  assert.deepEqual(pick(priceQuote({ grams: 100, perGram: 0.02, seconds: 7200 }, settings)),
+    [2, 0.07, 0.6, 0.21, 1.25, 4.13, 1.24, 5.37, 5.37, 5.37, 0]);
+  // 3 Stück: die Arbeit verteilt sich, 1,25 / 3 = 0,42 pro Stück
+  const three = priceQuote({ grams: 100, perGram: 0.02, seconds: 7200, qty: 3 }, settings);
+  assert.deepEqual(pick(three), [2, 0.07, 0.6, 0.21, 0.42, 3.3, 0.99, 4.29, 12.87, 12.87, 0]);
+  assert.equal(three.totalGrams, 300);
+  // Kleinteil unter dem Mindestpreis von 3 €
+  assert.deepEqual(pick(priceQuote({ grams: 5, perGram: 0.02, seconds: 600 }, settings)),
+    [0.1, 0.01, 0.05, 0.01, 1.25, 1.42, 0.43, 1.85, 1.85, 3, 1.15]);
+  // Kabelhalter: 31,2 g, 1:24 Std. -> Selbstkosten 2,41, Preis 3,13
+  const halter = priceQuote({ grams: 31.2, perGram: 0.02, seconds: 5040 }, settings);
+  assert.deepEqual([halter.cost, halter.piece], [2.41, 3.13]);
+  // Einzelne Werte überschreiben: ohne Arbeit, 50 % Gewinn
+  const own = priceQuote({ grams: 100, perGram: 0.02, seconds: 7200 }, { ...settings, laborMinutes: 0, profitPct: 50 });
+  assert.deepEqual([own.labor, own.cost, own.profit, own.piece], [0, 2.88, 1.44, 4.32]);
+  // Die Posten gehen immer auf
+  for (const q of [three, halter, own]) {
+    assert.equal(Math.round((q.filament + q.energy + q.machine + q.failure + q.labor) * 100), Math.round(q.cost * 100));
+    assert.equal(Math.round((q.cost + q.profit) * 100), Math.round(q.piece * 100));
+  }
   assert.deepEqual(['1:24', '1,5', '90 min', '2h', '', 'bald'].map(parseDuration), [5040, 5400, 5400, 7200, null, null]);
 });
 

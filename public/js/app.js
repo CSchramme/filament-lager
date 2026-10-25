@@ -159,7 +159,7 @@ function route() {
   document.body.classList.remove('has-movebar');
   if (app.view === 'lager') renderLager();
   else if (app.view === 'plaetze') renderPlaces();
-  else if (app.view === 'rechner') renderCalculator($view, app, { spoolUpdated });
+  else if (app.view === 'rechner') renderCalculator($view, app, { spoolUpdated, go });
   else if (app.view === 'drucke') renderPrints($view, app, { go });
   else if (app.view === 'bambu') renderBambu();
   else renderSettings();
@@ -1013,6 +1013,8 @@ function typeRow(t) {
   </div>`;
 }
 
+const dec = (v) => esc(String(v).replace('.', ','));
+
 function renderSettings() {
   const server = app.backend.mode === 'server';
   $view.innerHTML = `<section class="grid-2">
@@ -1023,14 +1025,25 @@ function renderSettings() {
         <div class="types" data-types>${app.settings.spoolTypes.map(typeRow).join('')}</div>
         <div class="actions"><button type="button" class="btn small" data-action="type-add">${icons.plus}Spulenart</button></div>
         <label class="field"><span>Als knapp markieren, wenn weniger übrig ist als</span><select name="lowStockPart">${[3, 4, 5, 6, 8, 10].map((n) => `<option value="${n}" ${n === app.settings.lowStockPart ? 'selected' : ''}>1/${n} des Kaufgewichts (bei 1.000 g: ${fmt(1000 / n)} g, bei 250 g: ${fmt(250 / n)} g)</option>`).join('')}</select></label>
-        <h3>Kostenrechner</h3>
-        <label class="field"><span>Filamentpreis pro kg, wenn eine Rolle keinen eigenen Preis hat (€)</span><input name="pricePerKg" inputmode="decimal" value="${esc(String(app.settings.pricePerKg).replace('.', ','))}"></label>
+        <h3>Preisrechnung</h3>
+        <label class="field"><span>Filamentpreis pro kg, wenn eine Rolle keinen eigenen Preis hat (€)</span><input name="pricePerKg" inputmode="decimal" value="${dec(app.settings.pricePerKg)}"></label>
         <div class="fields">
-          <label class="field"><span>Strompreis (€ pro kWh)</span><input name="energyPrice" inputmode="decimal" value="${esc(String(app.settings.energyPrice).replace('.', ','))}"></label>
+          <label class="field"><span>Strompreis (€ pro kWh)</span><input name="energyPrice" inputmode="decimal" value="${dec(app.settings.energyPrice)}"></label>
           <label class="field"><span>Drucker-Leistung beim Drucken (W)</span><input name="printerWatts" inputmode="numeric" value="${app.settings.printerWatts}"></label>
-          <label class="field"><span>Abnutzung (%)</span><input name="wearPct" inputmode="decimal" value="${esc(String(app.settings.wearPct).replace('.', ','))}"></label>
-          <label class="field"><span>Gewinn (%)</span><input name="profitPct" inputmode="decimal" value="${esc(String(app.settings.profitPct).replace('.', ','))}"></label>
+          <label class="field"><span>Drucker pro Druckstunde (€)</span><input name="machineRate" inputmode="decimal" value="${dec(app.settings.machineRate)}"><small class="muted">Abnutzung, Düsen, Platten, Ersatzteile</small></label>
+          <label class="field"><span>Fehldrucke (% auf Filament und Strom)</span><input name="failPct" inputmode="decimal" value="${dec(app.settings.failPct)}"></label>
+          <label class="field"><span>Arbeitszeit pro Auftrag (Min.)</span><input name="laborMinutes" inputmode="decimal" value="${dec(app.settings.laborMinutes)}"><small class="muted">slicen, abnehmen, nacharbeiten, verpacken</small></label>
+          <label class="field"><span>Stundenlohn (€)</span><input name="laborRate" inputmode="decimal" value="${dec(app.settings.laborRate)}"></label>
+          <label class="field"><span>Gewinn (% auf die Selbstkosten)</span><input name="profitPct" inputmode="decimal" value="${dec(app.settings.profitPct)}"></label>
+          <label class="field"><span>Mindestpreis pro Beleg (€)</span><input name="minPrice" inputmode="decimal" value="${dec(app.settings.minPrice)}"></label>
         </div>
+        <h3>Beleg und Strom</h3>
+        <div class="fields">
+          <label class="field"><span>Dein Name auf dem Beleg</span><input name="sellerName" value="${esc(app.settings.sellerName)}" autocomplete="name"></label>
+          <label class="field"><span>Wer zahlt den Strom?</span><input name="powerPayee" value="${esc(app.settings.powerPayee)}"></label>
+          <label class="field full"><span>Adresse oder Kontakt auf dem Beleg (optional)</span><textarea name="sellerAddress" rows="3">${esc(app.settings.sellerAddress)}</textarea></label>
+        </div>
+        <label class="switch"><input type="checkbox" name="smallBusiness" ${app.settings.smallBusiness ? 'checked' : ''}><span>Kleinunternehmer<small>Druckt „Gemäß § 19 UStG wird keine Umsatzsteuer berechnet“ auf den Beleg.</small></span></label>
         <h3>AMS</h3>
         <label class="field"><span>Anzahl AMS-Einheiten (je 4 Slots)</span><select name="amsUnits">${[1, 2, 3, 4].map((n) => `<option value="${n}" ${n === app.settings.amsUnits ? 'selected' : ''}>${n} (${n === 1 ? 'A1–A4' : 'A1–' + String.fromCharCode(64 + n) + '4'})</option>`).join('')}</select></label>
         <div class="actions"><button class="btn primary" type="submit">Speichern</button></div>
@@ -1320,8 +1333,9 @@ const forms = {
     }));
     app.settings = await app.backend.saveSettings({
       ...app.settings, spoolTypes, lowStockPart: f.lowStockPart.value, amsUnits: f.amsUnits.value,
-      pricePerKg: f.pricePerKg.value, wearPct: f.wearPct.value, profitPct: f.profitPct.value,
-      energyPrice: f.energyPrice.value, printerWatts: f.printerWatts.value,
+      ...Object.fromEntries(['pricePerKg', 'energyPrice', 'printerWatts', 'machineRate', 'failPct', 'laborMinutes', 'laborRate', 'profitPct', 'minPrice',
+        'sellerName', 'powerPayee', 'sellerAddress'].map((k) => [k, f[k].value])),
+      smallBusiness: f.smallBusiness.checked,
     });
     renderSettings();
     toast('Einstellungen gespeichert');
