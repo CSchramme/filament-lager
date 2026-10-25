@@ -35,11 +35,11 @@ test('Kosten eines mehrfarbigen Drucks je Farbe', () => {
   const t = taskSummary(raw);
   assert.equal(matchSpool([orange2, orange], t.filaments[0]).id, orange.id); // steckt in A1
   const q = jobQuote(t, [orange, orange2], settings);
-  // Orange 30,1 g × 2,5 ct + Schwarz 4,52 g × 2 ct (Standard) = 0,84 €; Strom 1,5 Std. × 120 W × 0,35 € = 0,06 €
+  // Orange 30,1 g × 2,5 ct + Schwarz 4,52 g × 2 ct (Standard) = 0,84 €; Strom 1,5 Std. × 120 W × 0,30 € = 0,05 €
   assert.equal(q.material, 0.84);
-  assert.equal(q.energy, 0.06);
-  assert.equal(q.base, 0.9);
-  assert.equal(q.piece, Math.round((0.9 + 0.05) * 1.1 * 100) / 100);
+  assert.equal(q.energy, 0.05);
+  assert.equal(q.base, 0.89);
+  assert.deepEqual([q.wear, q.cost, q.profit, q.piece], [0.04, 0.93, 0.09, 1.02]);
   assert.equal(q.parts[1].spool, null);
 });
 
