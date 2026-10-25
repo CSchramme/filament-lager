@@ -8,6 +8,7 @@ import {
   download, esc, fmt, fmtKg, icons, openDialog, readFile, ring, timeAgo, toast,
 } from './ui.js';
 import { renderCalculator } from './calculator.js';
+import { renderPrints } from './prints.js';
 
 const app = {
   backend: null, spools: [], settings: null, bambu: null, view: 'lager', poll: null, printersSig: '', selected: new Set(),
@@ -148,7 +149,7 @@ function go(view) {
 
 function route() {
   const v = location.hash.slice(1);
-  app.view = ['lager', 'plaetze', 'rechner', 'bambu', 'einstellungen'].includes(v) ? v : 'lager';
+  app.view = ['lager', 'plaetze', 'rechner', 'drucke', 'bambu', 'einstellungen'].includes(v) ? v : 'lager';
   document.querySelectorAll('.tab').forEach((t) => {
     if (t.dataset.view === app.view) t.setAttribute('aria-current', 'page');
     else t.removeAttribute('aria-current');
@@ -159,6 +160,7 @@ function route() {
   if (app.view === 'lager') renderLager();
   else if (app.view === 'plaetze') renderPlaces();
   else if (app.view === 'rechner') renderCalculator($view, app, { spoolUpdated });
+  else if (app.view === 'drucke') renderPrints($view, app, { go });
   else if (app.view === 'bambu') renderBambu();
   else renderSettings();
   if (app.backend.mode === 'server') {
@@ -348,7 +350,7 @@ function spoolDialog(spool, { copy = false } = {}) {
       </div>
       <div class="swatches full">${COLOR_PRESETS.map((c) => `<button type="button" class="swatch" data-hex="${c.hex}" data-name="${esc(c.name)}" title="${esc(c.name)}" aria-label="${esc(c.name)}" aria-pressed="${c.hex === s.colorHex}" style="background:${c.hex}"></button>`).join('')}</div>
       <label class="field"><span>Kaufgewicht in g</span><input name="purchaseWeight" type="number" inputmode="numeric" min="0" step="1" list="dl-weights" value="${s.purchaseWeight}"></label>
-      <label class="field"><span>Preis der Rolle in €</span><input name="price" inputmode="decimal" value="${s.price === null || s.price === undefined ? '' : esc(String(s.price).replace('.', ','))}" placeholder="leer: ${esc(String(app.settings.pricePerKg).replace('.', ','))} € pro kg"></label>
+      <label class="field"><span>Kaufpreis der Rolle in €</span><input name="price" inputmode="decimal" value="${s.price === null || s.price === undefined ? '' : esc(String(s.price).replace('.', ','))}" placeholder="leer: ${esc(String(app.settings.pricePerKg).replace('.', ','))} € pro kg"></label>
       <label class="field"><span>Spulenart</span><select name="spoolTypeId">${types.map((t) => `<option value="${esc(t.id)}" ${t.id === s.spoolTypeId ? 'selected' : ''}>${esc(t.name)} (Tara ${fmt(t.tare)} g)</option>`).join('')}</select></label>
       <label class="field"><span>Gewicht mit Spule in g</span><input name="gross" type="number" inputmode="numeric" min="0" step="1" value="${s.netWeight + tareFor(s.spoolTypeId)}"></label>
       <label class="field"><span>Restgewicht Filament in g</span><input name="netWeight" type="number" inputmode="numeric" min="0" step="1" value="${s.netWeight}"></label>
@@ -1024,6 +1026,8 @@ function renderSettings() {
         <h3>Kostenrechner</h3>
         <label class="field"><span>Filamentpreis pro kg, wenn eine Rolle keinen eigenen Preis hat (€)</span><input name="pricePerKg" inputmode="decimal" value="${esc(String(app.settings.pricePerKg).replace('.', ','))}"></label>
         <div class="fields">
+          <label class="field"><span>Strompreis (€ pro kWh)</span><input name="energyPrice" inputmode="decimal" value="${esc(String(app.settings.energyPrice).replace('.', ','))}"></label>
+          <label class="field"><span>Drucker-Leistung beim Drucken (W)</span><input name="printerWatts" inputmode="numeric" value="${app.settings.printerWatts}"></label>
           <label class="field"><span>Abnutzung (%)</span><input name="wearPct" inputmode="decimal" value="${esc(String(app.settings.wearPct).replace('.', ','))}"></label>
           <label class="field"><span>Gewinn (%)</span><input name="profitPct" inputmode="decimal" value="${esc(String(app.settings.profitPct).replace('.', ','))}"></label>
         </div>
@@ -1317,6 +1321,7 @@ const forms = {
     app.settings = await app.backend.saveSettings({
       ...app.settings, spoolTypes, lowStockPart: f.lowStockPart.value, amsUnits: f.amsUnits.value,
       pricePerKg: f.pricePerKg.value, wearPct: f.wearPct.value, profitPct: f.profitPct.value,
+      energyPrice: f.energyPrice.value, printerWatts: f.printerWatts.value,
     });
     renderSettings();
     toast('Einstellungen gespeichert');

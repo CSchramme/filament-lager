@@ -21,7 +21,9 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
   Slot, Paket, neues Paket).
 - **Rollennummern**: Jede Rolle hat eine feste Nummer (#1, #2, …), die sich nie ändert und nach
   dem Löschen nicht neu vergeben wird. Gut zum Aufschreiben auf die Spule; die Suche findet `#12`.
-- **Rechner**: STL oder 3MF hochladen, Rolle wählen, Preis ablesen (siehe unten).
+- **Rechner**: STL oder 3MF hochladen, Rolle wählen, Preis mit Filament, Strom, Abnutzung und
+  Gewinn ablesen (siehe unten).
+- **Drucke**: Druckverlauf von Bambu mit Kosten je Druck, Verkäufe mit Umsatz und Gewinn.
 - **API** zum Abrufen: Bestand je Farbe, Material und Platz, einzelne Rollen über ihre Nummer,
   AMS-Belegung (siehe unten).
 - Suchen, filtern (im AMS, geöffnet, ungeöffnet, knapp) und sortieren.
@@ -195,9 +197,10 @@ aus dem Lager wählen und den Preis ablesen:
 
 | Posten | Rechnung |
 |---|---|
-| Material | Gramm × Preis pro Gramm der Rolle |
-| Abnutzung | 5 % auf das Material |
-| Selbstkosten | Material + Abnutzung |
+| Filament | Gramm × Kaufpreis der Rolle ÷ Kaufgewicht |
+| Strom | Druckzeit × Leistung des Druckers × Strompreis (Standard 120 W und 0,35 € pro kWh) |
+| Abnutzung | 5 % auf Filament + Strom |
+| Selbstkosten | Filament + Strom + Abnutzung |
 | Gewinn | 10 % auf die Selbstkosten |
 | **Preis pro Stück** | Selbstkosten + Gewinn, dazu der Preis für die eingegebene Stückzahl |
 
@@ -205,13 +208,33 @@ aus dem Lager wählen und den Preis ablesen:
   geslicte Platte als `.gcode.3mf` speichern) nimmt der Rechner die genauen Gramm und zeigt die Druckzeit. Bei einer STL oder
   ungeslicten 3MF schätzt er aus Volumen und Oberfläche (Außenhaut voll, Inneres mit 15 % Infill,
   einstellbar). Stützen sind in der Schätzung nicht enthalten. Gramm lassen sich auch von Hand eintragen.
-- **Preis pro Gramm:** aus dem Preis der Rolle (im Bearbeiten-Dialog „Preis der Rolle in €“), sonst
-  aus dem Standardpreis pro kg unter Einstellungen.
+- **Kaufpreis:** Für jede Rolle eintragen, was sie gekostet hat: im Bearbeiten-Dialog unter
+  „Kaufpreis der Rolle in €“ oder direkt im Rechner, der danach fragt, wenn er fehlt. Bis dahin
+  rechnet er mit dem Standardpreis pro kg aus den Einstellungen.
+- **Druckzeit:** kommt aus einer geslicten 3MF oder dem Druckverlauf; sonst von Hand eintragen
+  (z. B. `1:30`). Strompreis und Leistung des Druckers stehen unter Einstellungen; die Leistung
+  hängt vom Modell und Material ab, 120 W ist ein Richtwert für PLA.
 - Abnutzung und Gewinn sind unter Einstellungen voreingestellt (5 % und 10 %) und lassen sich
   im Rechner für die einzelne Rechnung ändern.
 - Der Rechner zeigt, ob die gewählte Rolle reicht, und schlägt sonst Rollen in derselben Farbe vor.
   „… g von #5 abziehen“ verbucht den Druck direkt im Lager. „Angebot kopieren“ legt einen kurzen
-  Text mit Modell, Farbe und Preis in die Zwischenablage.
+  Text mit Modell, Farbe und Preis in die Zwischenablage. „Verkauf eintragen“ speichert den Verkauf.
+
+## Drucke und Verkäufe
+
+Unter **Drucke** steht der Druckverlauf aus dem Bambu-Konto (wird mit dem automatischen Abgleich
+geholt, „Aktualisieren“ holt ihn sofort): Titelbild, Datum, Drucker, Gramm, Druckzeit, die
+verwendeten Farben mit der passenden Lagerrolle und der Preis nach derselben Rechnung wie im
+Rechner, bei mehrfarbigen Drucken je Farbe mit dem Kaufpreis der passenden Rolle.
+
+- **Verkaufen**: trägt einen Verkauf mit vorgeschlagenem Preis ein (Anzahl, Datum, Kunde, Notiz
+  anpassbar). Oben stehen Umsatz und Gewinn im Monat und insgesamt.
+- **Im Rechner**: übernimmt Gramm, Druckzeit und Farbe in den Rechner.
+- **Erneut drucken**: Einen Druck starten erlaubt Bambu nur in den eigenen Apps. Die App zeigt den
+  Weg über Bambu Handy und verlinkt das Modell auf MakerWorld, wenn es von dort stammt.
+
+Den Druckverlauf liefert die inoffizielle Bambu-Schnittstelle (`/v1/user-service/my/tasks`); bekannt
+sind die Status „fertig“ und „abgebrochen“.
 
 ## API
 

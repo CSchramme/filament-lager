@@ -188,6 +188,12 @@ export class BambuCloud {
     return this.request('DELETE', SPOOLS_PATH + '/batch', { body: { ids: ids.map(Number) } });
   }
 
+  // Druckverlauf, neueste zuerst. after: ID des letzten Eintrags der vorigen Seite.
+  async listTasks({ limit = 50, after } = {}) {
+    const data = await this.request('GET', '/v1/user-service/my/tasks', { query: { limit, after } });
+    return (data.hits || []).filter((t) => t && typeof t === 'object');
+  }
+
   async listDevices() {
     const data = await this.request('GET', '/v1/iot-service/api/user/bind');
     return (data.devices || []).filter((d) => d && typeof d === 'object');

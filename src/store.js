@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  assignNumbers, normalizeSettings, normalizeSpool, placeList,
+  assignNumbers, normalizeSale, normalizeSettings, normalizeSpool, placeList,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 
@@ -49,10 +49,14 @@ export class Store {
       delete this.data.bambu.options.autoPull; // ersetzt durch autoSync
       this.data.nextNr = raw.nextNr;
       this.data.apiKey = raw.apiKey || '';
+      this.data.tasks = Array.isArray(raw.tasks) ? raw.tasks : [];
+      this.data.sales = (Array.isArray(raw.sales) ? raw.sales : []).map((x) => normalizeSale(x));
       assignNumbers(this.data);
       this.data.settings.places = placeList(this.data.settings, this.data.spools);
     } else {
-      this.data = { version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '' };
+      this.data = {
+        version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '', tasks: [], sales: [],
+      };
       await this.save();
     }
     return this.data;

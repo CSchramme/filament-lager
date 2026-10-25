@@ -70,6 +70,8 @@ export function defaultSettings() {
     pricePerKg: 20,
     wearPct: 5,
     profitPct: 10,
+    energyPrice: 0.35, // € pro kWh
+    printerWatts: 120, // mittlere Leistung beim Drucken
     places: [],
   };
 }
@@ -193,6 +195,8 @@ export function normalizeSettings(input) {
     pricePerKg: Math.max(0, toMoney(src.pricePerKg) ?? base.pricePerKg),
     wearPct: Math.max(0, toMoney(src.wearPct) ?? base.wearPct),
     profitPct: Math.max(0, toMoney(src.profitPct) ?? base.profitPct),
+    energyPrice: Math.max(0, toMoney(src.energyPrice) ?? base.energyPrice),
+    printerWatts: Math.max(0, toInt(src.printerWatts, base.printerWatts)),
     places,
   };
 }
@@ -252,16 +256,101 @@ export function pricePerGram(spool, settings) {
   return settings.pricePerKg / 1000;
 }
 
-// Abnutzung auf die Materialkosten, Gewinn auf Material plus Abnutzung.
-// Jeder Posten wird auf Cent gerundet, damit die angezeigten Beträge aufgehen.
-export function priceQuote({ grams, perGram, wearPct, profitPct, qty = 1 }) {
+// Passende Lagerrolle für ein Filament aus dem Druckverlauf: gleicher Typ,
+// ähnlichste Farbe; eine Rolle, die gerade in diesem AMS-Slot steckt, zuerst.
+export function matchSpool(spools, { color, type, slot } = {}) {
+  let best = null;
+  for (const s of spools) {
+    if (type && filamentTypeOf(s.material) !== filamentTypeOf(type)) continue;
+    const d = colorDistance(s.colorHex, color);
+    if (d > 60) continue;
+    const score = d - (slot && s.inAms && s.bambu.slot === slot ? 1000 : 0) + (s.netWeight > 0 ? 0 : 500);
+    if (!best || score < best.score) best = { s, score };
+  }
+  return best ? best.s : null;
+}
+
+// Kosten eines Drucks mit einem oder mehreren Filamenten (z. B. aus dem Druckverlauf).
+export function jobQuote(job, spools, settings, { wearPct = settings.wearPct, profitPct = settings.profitPct, qty = 1 } = {}) {
+  const list = job.filaments && job.filaments.length ? job.filaments : [{ grams: job.grams }];
+  const parts = list.map((f) => {
+    const spool = f.color ? matchSpool(spools, f) : null;
+    return { ...f, spool, perGram: pricePerGram(spool, settings) };
+  });
+  const grams = parts.reduce((a, p) => a + p.grams, 0) || job.grams || 0;
+  const material = parts.reduce((a, p) => a + p.grams * p.perGram, 0);
+  const perGram = grams ? material / grams : settings.pricePerKg / 1000;
+  return {
+    ...priceQuote({ grams, perGram, energy: energyCost(job.seconds || 0, settings), wearPct, profitPct, qty }),
+    perGram,
+    parts,
+  };
+}
+
+// Stromkosten für eine Druckzeit in Sekunden.
+export function energyCost(seconds, settings) {
+  return (seconds / 3600) * (settings.printerWatts / 1000) * settings.energyPrice;
+}
+
+// "1:24" (Std:Min), "1,5" (Stunden) oder "90m" -> Sekunden; leer/ungültig -> null
+export function parseDuration(text) {
+  const t = str(text).toLowerCase().replace(/\s/g, '');
+  if (!t) return null;
+  let m = /^(\d+):(\d{1,2})$/.exec(t);
+  if (m) return Number(m[1]) * 3600 + Number(m[2]) * 60;
+  m = /^(\d+(?:[.,]\d+)?)(h|std)?$/.exec(t);
+  if (m) return Math.round(Number(m[1].replace(',', '.')) * 3600);
+  m = /^(\d+)(m|min)$/.exec(t);
+  if (m) return Number(m[1]) * 60;
+  return null;
+}
+
+// Filament und Strom sind die Grundkosten. Abnutzung auf die Grundkosten,
+// Gewinn auf die Selbstkosten. Jeder Posten wird auf Cent gerundet, damit die
+// angezeigten Beträge aufgehen.
+export function priceQuote({ grams, perGram, energy = 0, wearPct, profitPct, qty = 1 }) {
   const cents = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
   const material = cents(grams * perGram);
-  const wear = cents(material * (wearPct / 100));
-  const cost = cents(material + wear);
+  const power = cents(energy);
+  const base = cents(material + power);
+  const wear = cents(base * (wearPct / 100));
+  const cost = cents(base + wear);
   const profit = cents(cost * (profitPct / 100));
   const piece = cents(cost + profit);
-  return { grams, material, wear, cost, profit, piece, qty, total: cents(piece * qty), totalGrams: grams * qty };
+  return {
+    grams, material, energy: power, base, wear, cost, profit, piece, qty, total: cents(piece * qty), totalGrams: grams * qty,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Verkäufe
+
+export function normalizeSale(input, { now = new Date().toISOString() } = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  const qty = Math.max(1, toInt(src.qty, 1));
+  return {
+    id: str(src.id) || newId(),
+    date: str(src.date) || now.slice(0, 10),
+    title: str(src.title) || 'Druck',
+    qty,
+    price: Math.max(0, toMoney(src.price) ?? 0), // erhaltener Betrag für alle Stück
+    cost: Math.max(0, toMoney(src.cost) ?? 0), // Selbstkosten für alle Stück
+    grams: Math.max(0, Math.round(Number(src.grams) || 0)),
+    spoolNr: toInt(src.spoolNr, null),
+    taskId: str(src.taskId),
+    customer: str(src.customer),
+    note: str(src.note),
+    createdAt: str(src.createdAt) || now,
+  };
+}
+
+export function salesSummary(sales, { month = new Date().toISOString().slice(0, 7) } = {}) {
+  const sum = (list) => {
+    const revenue = list.reduce((a, s) => a + s.price, 0);
+    const cost = list.reduce((a, s) => a + s.cost, 0);
+    return { count: list.length, pieces: list.reduce((a, s) => a + s.qty, 0), revenue, cost, profit: revenue - cost };
+  };
+  return { total: sum(sales), month: sum(sales.filter((s) => s.date.startsWith(month))) };
 }
 
 // Neues Restgewicht aus genau einer Angabe: net (Restgewicht), gross (mit

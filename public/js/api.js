@@ -2,7 +2,7 @@
 // alle Änderungen dorthin. Ohne Server (z. B. als statische Seite) speichert
 // das Lager im Browser; die Bambu-Anbindung ist dann nicht verfügbar.
 import {
-  assignNumbers, newId, normalizeSettings, normalizeSpool, placeList, planMove, planPlaces,
+  assignNumbers, newId, normalizeSale, normalizeSettings, normalizeSpool, placeList, planMove, planPlaces, salesSummary,
 } from './domain.js';
 import { seedSpools } from './seed.js';
 
@@ -36,6 +36,12 @@ class ServerBackend {
   appLogin(password) { return this.req('POST', 'api/login', { password }); }
   appLogout() { return this.req('POST', 'api/logout', {}); }
   getApiKey() { return this.req('GET', 'api/schluessel').then((d) => d.key); }
+  tasks() { return this.req('GET', 'api/drucke'); }
+  refreshTasks() { return this.req('POST', 'api/drucke/aktualisieren', {}); }
+  sales() { return this.req('GET', 'api/verkaeufe'); }
+  addSale(sale) { return this.req('POST', 'api/verkaeufe', sale); }
+  updateSale(id, patch) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id), patch); }
+  deleteSale(id) { return this.req('DELETE', 'api/verkaeufe/' + encodeURIComponent(id)); }
   newApiKey() { return this.req('POST', 'api/schluessel', {}).then((d) => d.key); }
 
   getState() { return this.req('GET', 'api/state'); }
@@ -103,11 +109,12 @@ class LocalBackend {
         settings: normalizeSettings(raw.settings),
         spools: (raw.spools || []).map((s) => normalizeSpool(s, { keepTimestamps: true })),
         nextNr: raw.nextNr,
+        sales: (Array.isArray(raw.sales) ? raw.sales : []).map((x) => normalizeSale(x)),
       };
       data.settings.places = placeList(data.settings, data.spools);
       return assignNumbers(data);
     }
-    const data = { settings: normalizeSettings(), spools: seedSpools(), nextNr: 1 };
+    const data = { settings: normalizeSettings(), spools: seedSpools(), nextNr: 1, sales: [] };
     this.write(data);
     return data;
   }
@@ -152,6 +159,45 @@ class LocalBackend {
       const idx = data.spools.findIndex((s) => s.id === id);
       if (idx >= 0) data.spools[idx] = normalizeSpool(patch, { base: data.spools[idx] });
     }
+  }
+
+  // Ohne Server gibt es keinen Druckverlauf von Bambu; Verkäufe liegen im Browser.
+  async tasks() {
+    return { connected: false, lastSync: '', tasks: [] };
+  }
+
+  async refreshTasks() {
+    throw new Error('Der Druckverlauf braucht den Lager-Server und eine Bambu-Anmeldung.');
+  }
+
+  salesView(data) {
+    return { sales: data.sales, summary: salesSummary(data.sales) };
+  }
+
+  async sales() {
+    return this.salesView(this.load());
+  }
+
+  async addSale(sale) {
+    const data = this.load();
+    const created = normalizeSale({ ...sale, id: undefined, createdAt: undefined });
+    data.sales.unshift(created);
+    this.write(data);
+    return { sale: created, ...this.salesView(data) };
+  }
+
+  async updateSale(id, patch) {
+    const data = this.load();
+    data.sales = data.sales.map((x) => (x.id === id ? normalizeSale({ ...x, ...patch, id: x.id, createdAt: x.createdAt }) : x));
+    this.write(data);
+    return this.salesView(data);
+  }
+
+  async deleteSale(id) {
+    const data = this.load();
+    data.sales = data.sales.filter((x) => x.id !== id);
+    this.write(data);
+    return this.salesView(data);
   }
 
   async moveSpools(ids, target) {

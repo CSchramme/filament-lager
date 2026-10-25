@@ -173,7 +173,7 @@ main.wrap { padding-block: 20px 64px; display: grid; gap: 20px; }
 .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--surface); }
 .chip .count { font-family: var(--font-mono); font-weight: 500; opacity: .7; margin-left: 4px; }
 
-input[type="text"], input[type="search"], input[type="number"], input[type="email"], input[type="password"], input:not([type]), select, textarea {
+input[type="text"], input[type="search"], input[type="number"], input[type="email"], input[type="password"], input[type="date"], input:not([type]), select, textarea {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -540,6 +540,37 @@ input.pct { width: 4.2em; min-height: 30px; padding: 2px 6px; text-align: right;
   .calc-bar strong { font-family: var(--font-display); font-stretch: 112%; font-size: var(--step-2); }
   .calc { padding-bottom: 64px; }
 }
+
+/* Drucke und Verkäufe */
+.sales-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 960px) { .sales-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.sale-list { display: grid; }
+.sale-row { display: grid; grid-template-columns: 6.5em minmax(0, 1fr) auto 5.5em auto; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.sale-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sale-row .num { text-align: right; }
+.neg { color: var(--crit); }
+@media (max-width: 560px) {
+  .sale-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .sale-row > :first-child { grid-column: 1 / -1; text-align: left; }
+  .sale-row > :nth-child(4) { display: none; }
+}
+.tasks { display: grid; gap: 10px; }
+.task { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; grid-template-areas: "cover body side" "cover actions actions"; gap: 6px 14px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.task-cover { grid-area: cover; width: 72px; height: 72px; border-radius: var(--radius-sm); object-fit: cover; background: var(--surface-2); }
+.task-body { grid-area: body; display: grid; gap: 6px; min-width: 0; }
+.task-title { overflow-wrap: anywhere; }
+.task-side { grid-area: side; display: grid; justify-items: end; align-content: start; gap: 2px; }
+.task-side strong { font-family: var(--font-display); font-stretch: 112%; font-size: var(--step-1); }
+.task-actions { grid-area: actions; }
+.fils { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: var(--step--1); }
+.fil { display: inline-flex; align-items: center; gap: 4px; }
+.dot-color { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--line); vertical-align: middle; margin-right: 2px; }
+@media (max-width: 560px) {
+  .task { grid-template-columns: 56px minmax(0, 1fr); grid-template-areas: "cover body" "side side" "actions actions"; }
+  .task-cover { width: 56px; height: 56px; }
+  .task-side { justify-items: start; grid-template-columns: auto auto auto; align-items: baseline; gap: 8px; }
+}
+.price-ask { display: grid; gap: 8px; }
 
 /* API */
 pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); border-radius: var(--radius-sm); overflow-x: auto; font-family: var(--font-mono); font-size: var(--step--1); line-height: 1.5; }

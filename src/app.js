@@ -1,7 +1,7 @@
 // HTTP-Schnittstelle des Filament-Lagers und Auslieferung der Weboberfläche.
 import express from 'express';
 import {
-  colorNameFor, newId, normalizeSettings, normalizeSpool, planMove, planPlaces,
+  colorNameFor, newId, normalizeSale, normalizeSettings, normalizeSpool, planMove, planPlaces, salesSummary,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import {
@@ -9,6 +9,7 @@ import {
 } from './bambu/cloud.js';
 import { reconcileAms } from './bambu/ams.js';
 import { applyPull, applyPush, pullPreview, pushPreview } from './bambu/sync.js';
+import { mergeTasks, taskSummary } from './bambu/tasks.js';
 import { createAuth } from './auth.js';
 import { createPublicApi, newApiKey } from './api-v1.js';
 
@@ -150,6 +151,14 @@ export function createApp({
     syncPrinters();
   }
 
+  // Druckverlauf holen und mit dem gespeicherten zusammenführen.
+  async function refreshTasks(save = true) {
+    const raw = await withCloud((c) => c.listTasks({ limit: 50 }));
+    store.data.tasks = mergeTasks(store.data.tasks || [], raw.map(taskSummary));
+    cloudCfg().lastTasksAt = new Date().toISOString();
+    if (save) await store.save();
+  }
+
   // Automatischer Abgleich mit dem Filament Manager: neue Spulen, Zuordnungen
   // und Restgewichte. "Im AMS" kommt dabei vom Drucker, nicht aus der Liste.
   let syncRunning = null;
@@ -161,6 +170,7 @@ export function createApp({
         const result = applyPull(store, cloudSpools, 'alle', { withAms: false });
         cloudCfg().lastPullAt = new Date().toISOString();
         applyAmsChanges();
+        await refreshTasks(false).catch((err) => console.error('Druckverlauf nicht abrufbar:', err.message));
         await store.save();
         return result;
       })().finally(() => {
@@ -306,6 +316,43 @@ export function createApp({
     store.data.apiKey = newApiKey();
     await store.save();
     res.json({ key: store.data.apiKey });
+  });
+
+  // -- Druckverlauf und Verkäufe ---------------------------------------------
+
+  const tasksView = () => ({ connected: Boolean(cloudCfg().token), lastSync: cloudCfg().lastTasksAt || '', tasks: store.data.tasks || [] });
+
+  app.get('/api/drucke', (req, res) => res.json(tasksView()));
+
+  app.post('/api/drucke/aktualisieren', async (req, res) => {
+    await refreshTasks();
+    res.json(tasksView());
+  });
+
+  const salesView = () => ({ sales: store.data.sales, summary: salesSummary(store.data.sales) });
+
+  app.get('/api/verkaeufe', (req, res) => res.json(salesView()));
+
+  app.post('/api/verkaeufe', async (req, res) => {
+    const sale = normalizeSale({ ...(req.body || {}), id: undefined, createdAt: undefined });
+    store.data.sales.unshift(sale);
+    await store.save();
+    res.status(201).json({ sale, ...salesView() });
+  });
+
+  app.put('/api/verkaeufe/:id', async (req, res) => {
+    const idx = store.data.sales.findIndex((x) => x.id === req.params.id);
+    if (idx < 0) throw new HttpError(404, 'Verkauf nicht gefunden.');
+    const old = store.data.sales[idx];
+    store.data.sales[idx] = normalizeSale({ ...old, ...(req.body || {}), id: old.id, createdAt: old.createdAt });
+    await store.save();
+    res.json(salesView());
+  });
+
+  app.delete('/api/verkaeufe/:id', async (req, res) => {
+    store.data.sales = store.data.sales.filter((x) => x.id !== req.params.id);
+    await store.save();
+    res.json(salesView());
   });
 
   // -- Bambu Cloud ----------------------------------------------------------

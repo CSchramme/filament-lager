@@ -23,6 +23,11 @@ class FakeCloud {
     return [];
   }
 
+  async listTasks() {
+    return [{ id: 7, title: 'Halter', status: 2, startTime: '2026-10-20T10:00:00Z', endTime: '2026-10-20T11:00:00Z', weight: 12.5, costTime: 3500,
+      amsDetailMapping: [{ ams: 0, targetColor: 'FFFFFFFF', filamentType: 'PLA', weight: 12.5 }] }];
+  }
+
   async mqttUsername() {
     return 'u_1';
   }
@@ -279,4 +284,26 @@ test('Automatischer Abgleich und Drucker aus dem Bambu-Konto', async () => {
   await fetch(`http://127.0.0.1:${srv.address().port}/api/bambu/cloud/logout`, { method: 'POST' });
   assert.deepEqual(pm.configs, []);
   srv.close();
+});
+
+test('Druckverlauf holen und Verkäufe verwalten', async () => {
+  await call('POST', '/api/bambu/cloud/login', { account: 'a@b.de', password: '' });
+  await call('POST', '/api/bambu/cloud/code', { code: '111111' });
+  const refreshed = await call('POST', '/api/drucke/aktualisieren', {});
+  assert.equal(refreshed.body.connected, true);
+  assert.deepEqual(refreshed.body.tasks.map((t) => [t.id, t.title, t.seconds, t.grams]), [['7', 'Halter', 3600, 12.5]]);
+  assert.equal((await call('GET', '/api/drucke')).body.tasks.length, 1);
+
+  const added = await call('POST', '/api/verkaeufe', { title: 'Halter', qty: 2, price: '3,50', cost: 1.2, taskId: '7' });
+  assert.equal(added.status, 201);
+  assert.equal(added.body.summary.total.profit, 2.3);
+  const id = added.body.sale.id;
+  const upd = await call('PUT', '/api/verkaeufe/' + id, { price: 4 });
+  assert.equal(upd.body.sales[0].price, 4);
+  assert.equal(upd.body.sales[0].qty, 2);
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'lager.json'), 'utf8'));
+  assert.equal(saved.sales.length, 1);
+  assert.equal(saved.tasks.length, 1);
+  const del = await call('DELETE', '/api/verkaeufe/' + id);
+  assert.equal(del.body.sales.length, 0);
 });
