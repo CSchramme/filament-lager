@@ -7,6 +7,7 @@ import {
 import {
   download, esc, fmt, fmtKg, icons, openDialog, readFile, ring, timeAgo, toast,
 } from './ui.js';
+import { renderCalculator } from './calculator.js';
 
 const app = {
   backend: null, spools: [], settings: null, bambu: null, view: 'lager', poll: null, printersSig: '', selected: new Set(),
@@ -147,7 +148,7 @@ function go(view) {
 
 function route() {
   const v = location.hash.slice(1);
-  app.view = ['lager', 'plaetze', 'bambu', 'einstellungen'].includes(v) ? v : 'lager';
+  app.view = ['lager', 'plaetze', 'rechner', 'bambu', 'einstellungen'].includes(v) ? v : 'lager';
   document.querySelectorAll('.tab').forEach((t) => {
     if (t.dataset.view === app.view) t.setAttribute('aria-current', 'page');
     else t.removeAttribute('aria-current');
@@ -157,6 +158,7 @@ function route() {
   document.body.classList.remove('has-movebar');
   if (app.view === 'lager') renderLager();
   else if (app.view === 'plaetze') renderPlaces();
+  else if (app.view === 'rechner') renderCalculator($view, app, { spoolUpdated });
   else if (app.view === 'bambu') renderBambu();
   else renderSettings();
   if (app.backend.mode === 'server') {
@@ -346,6 +348,7 @@ function spoolDialog(spool, { copy = false } = {}) {
       </div>
       <div class="swatches full">${COLOR_PRESETS.map((c) => `<button type="button" class="swatch" data-hex="${c.hex}" data-name="${esc(c.name)}" title="${esc(c.name)}" aria-label="${esc(c.name)}" aria-pressed="${c.hex === s.colorHex}" style="background:${c.hex}"></button>`).join('')}</div>
       <label class="field"><span>Kaufgewicht in g</span><input name="purchaseWeight" type="number" inputmode="numeric" min="0" step="1" list="dl-weights" value="${s.purchaseWeight}"></label>
+      <label class="field"><span>Preis der Rolle in €</span><input name="price" inputmode="decimal" value="${s.price === null || s.price === undefined ? '' : esc(String(s.price).replace('.', ','))}" placeholder="leer: ${esc(String(app.settings.pricePerKg).replace('.', ','))} € pro kg"></label>
       <label class="field"><span>Spulenart</span><select name="spoolTypeId">${types.map((t) => `<option value="${esc(t.id)}" ${t.id === s.spoolTypeId ? 'selected' : ''}>${esc(t.name)} (Tara ${fmt(t.tare)} g)</option>`).join('')}</select></label>
       <label class="field"><span>Gewicht mit Spule in g</span><input name="gross" type="number" inputmode="numeric" min="0" step="1" value="${s.netWeight + tareFor(s.spoolTypeId)}"></label>
       <label class="field"><span>Restgewicht Filament in g</span><input name="netWeight" type="number" inputmode="numeric" min="0" step="1" value="${s.netWeight}"></label>
@@ -447,6 +450,7 @@ function spoolDialog(spool, { copy = false } = {}) {
         colorName: f.colorName.value,
         colorHex: f.colorHex.value,
         purchaseWeight: f.purchaseWeight.value,
+        price: f.price.value,
         netWeight: f.netWeight.value === '' ? f.purchaseWeight.value : f.netWeight.value,
         spoolTypeId: f.spoolTypeId.value,
         location: f.location.value,
@@ -1011,12 +1015,19 @@ function renderSettings() {
   const server = app.backend.mode === 'server';
   $view.innerHTML = `<section class="grid-2">
     <div class="panel">
-      <div class="panel-head"><h2>Spulen und AMS</h2><p>Tara ist das Leergewicht der Spule und wird beim Wiegen abgezogen</p></div>
+      <div class="panel-head"><h2>Spulen, Preise und AMS</h2><p>Tara ist das Leergewicht der Spule und wird beim Wiegen abgezogen</p></div>
       <form data-form="settings" class="types">
         <div class="type-row small muted"><span>Name</span><span>Tara in g</span><span></span></div>
         <div class="types" data-types>${app.settings.spoolTypes.map(typeRow).join('')}</div>
         <div class="actions"><button type="button" class="btn small" data-action="type-add">${icons.plus}Spulenart</button></div>
         <label class="field"><span>Als knapp markieren, wenn weniger übrig ist als</span><select name="lowStockPart">${[3, 4, 5, 6, 8, 10].map((n) => `<option value="${n}" ${n === app.settings.lowStockPart ? 'selected' : ''}>1/${n} des Kaufgewichts (bei 1.000 g: ${fmt(1000 / n)} g, bei 250 g: ${fmt(250 / n)} g)</option>`).join('')}</select></label>
+        <h3>Kostenrechner</h3>
+        <label class="field"><span>Filamentpreis pro kg, wenn eine Rolle keinen eigenen Preis hat (€)</span><input name="pricePerKg" inputmode="decimal" value="${esc(String(app.settings.pricePerKg).replace('.', ','))}"></label>
+        <div class="fields">
+          <label class="field"><span>Abnutzung (%)</span><input name="wearPct" inputmode="decimal" value="${esc(String(app.settings.wearPct).replace('.', ','))}"></label>
+          <label class="field"><span>Gewinn (%)</span><input name="profitPct" inputmode="decimal" value="${esc(String(app.settings.profitPct).replace('.', ','))}"></label>
+        </div>
+        <h3>AMS</h3>
         <label class="field"><span>Anzahl AMS-Einheiten (je 4 Slots)</span><select name="amsUnits">${[1, 2, 3, 4].map((n) => `<option value="${n}" ${n === app.settings.amsUnits ? 'selected' : ''}>${n} (${n === 1 ? 'A1–A4' : 'A1–' + String.fromCharCode(64 + n) + '4'})</option>`).join('')}</select></label>
         <div class="actions"><button class="btn primary" type="submit">Speichern</button></div>
       </form>
@@ -1097,6 +1108,10 @@ async function updateApiPanel() {
 
 // ---------------------------------------------------------------------------
 // Ereignisse
+
+function spoolUpdated(updated) {
+  app.spools = app.spools.map((x) => (x.id === updated.id ? updated : x));
+}
 
 function refreshView() {
   if (app.view === 'lager') updateLager();
@@ -1301,6 +1316,7 @@ const forms = {
     }));
     app.settings = await app.backend.saveSettings({
       ...app.settings, spoolTypes, lowStockPart: f.lowStockPart.value, amsUnits: f.amsUnits.value,
+      pricePerKg: f.pricePerKg.value, wearPct: f.wearPct.value, profitPct: f.profitPct.value,
     });
     renderSettings();
     toast('Einstellungen gespeichert');

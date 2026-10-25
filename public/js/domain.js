@@ -66,6 +66,10 @@ export function defaultSettings() {
     ],
     lowStockPart: 6, // knapp, wenn weniger als 1/6 des Kaufgewichts übrig ist
     amsUnits: 1,
+    // Kostenrechner: Preis ohne eigenen Rollenpreis, Zuschläge in Prozent
+    pricePerKg: 20,
+    wearPct: 5,
+    profitPct: 10,
     places: [],
   };
 }
@@ -84,6 +88,13 @@ function toInt(v, fallback) {
   if (v === '' || v === null || v === undefined) return fallback;
   const n = Math.round(Number(String(v).replace(',', '.')));
   return Number.isFinite(n) ? n : fallback;
+}
+
+// Betrag mit Komma oder Punkt, auf Cent gerundet; leer -> null
+function toMoney(v) {
+  if (v === '' || v === null || v === undefined) return null;
+  const n = Number(String(v).replace(/\s|€/g, '').replace(',', '.'));
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
 }
 
 function toBool(v, fallback) {
@@ -179,6 +190,9 @@ export function normalizeSettings(input) {
     spoolTypes: spoolTypes.length ? spoolTypes : base.spoolTypes,
     lowStockPart: Math.min(20, Math.max(2, toInt(src.lowStockPart, base.lowStockPart))),
     amsUnits: Math.min(4, Math.max(1, toInt(src.amsUnits, base.amsUnits))),
+    pricePerKg: Math.max(0, toMoney(src.pricePerKg) ?? base.pricePerKg),
+    wearPct: Math.max(0, toMoney(src.wearPct) ?? base.wearPct),
+    profitPct: Math.max(0, toMoney(src.profitPct) ?? base.profitPct),
     places,
   };
 }
@@ -208,6 +222,46 @@ export function grossOf(spool, settings) {
 
 export function netFromGross(gross, tare) {
   return Math.max(0, Math.round(Number(gross) - Number(tare)));
+}
+
+// ---------------------------------------------------------------------------
+// Kostenrechner
+
+// Typische Dichten in g/cm³ nach Filamenttyp.
+const DENSITY = {
+  PLA: 1.24, 'PLA-CF': 1.22, PETG: 1.27, 'PETG-CF': 1.25, PCTG: 1.23, 'PET-CF': 1.29, ABS: 1.04, 'ABS-GF': 1.08,
+  ASA: 1.07, TPU: 1.21, PC: 1.2, PA: 1.06, 'PA-CF': 1.09, 'PA6-CF': 1.13, 'PAHT-CF': 1.06, PVA: 1.23, HIPS: 1.04,
+  BVOH: 1.14, PPS: 1.36,
+};
+
+export function densityOf(material) {
+  return DENSITY[filamentTypeOf(material)] || 1.24;
+}
+
+// Grobe Schätzung ohne Slicer: Außenhaut (Wände, Boden, Deckel) voll, Inneres
+// mit Infill. Wandstärke in mm, Infill in Prozent; Ergebnis in Gramm.
+export function estimateGrams({ volumeMm3, areaMm2 }, { infillPct = 15, wallMm = 0.85, density = 1.24 } = {}) {
+  const shell = Math.min(volumeMm3, areaMm2 * wallMm);
+  const inner = Math.max(0, volumeMm3 - shell) * (infillPct / 100);
+  return ((shell + inner) / 1000) * density;
+}
+
+// Preis pro Gramm: eigener Rollenpreis, sonst der Standardpreis pro kg.
+export function pricePerGram(spool, settings) {
+  if (spool && spool.price !== null && spool.price !== undefined && spool.purchaseWeight > 0) return spool.price / spool.purchaseWeight;
+  return settings.pricePerKg / 1000;
+}
+
+// Abnutzung auf die Materialkosten, Gewinn auf Material plus Abnutzung.
+// Jeder Posten wird auf Cent gerundet, damit die angezeigten Beträge aufgehen.
+export function priceQuote({ grams, perGram, wearPct, profitPct, qty = 1 }) {
+  const cents = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
+  const material = cents(grams * perGram);
+  const wear = cents(material * (wearPct / 100));
+  const cost = cents(material + wear);
+  const profit = cents(cost * (profitPct / 100));
+  const piece = cents(cost + profit);
+  return { grams, material, wear, cost, profit, piece, qty, total: cents(piece * qty), totalGrams: grams * qty };
 }
 
 // Neues Restgewicht aus genau einer Angabe: net (Restgewicht), gross (mit
@@ -287,6 +341,7 @@ export function normalizeSpool(input, { base = null, now = new Date().toISOStrin
     opened: toBool(src.opened, netWeight < purchaseWeight),
     inAms: toBool(src.inAms, false),
     note: str(src.note),
+    price: (() => { const p = toMoney(src.price); return p !== null && p >= 0 ? p : null; })(), // Kaufpreis der Rolle in €
     bambu: normalizeBambu(src.bambu),
     createdAt: str(src.createdAt) || now,
     updatedAt: keepTimestamps && src.updatedAt ? str(src.updatedAt) : now,
@@ -450,7 +505,7 @@ export function summarize(spools, settings) {
 // CSV im Excel-Format (Semikolon, deutsche Spaltennamen)
 
 export const CSV_COLUMNS = ['Nr', 'Art', 'Hersteller', 'Farbe', 'Farbcode', 'Kaufgewicht', 'Gewicht mit Spule', 'Gewicht',
-  'Lagerort', 'geöffnet?', 'im AMS', 'Spulenart', 'Notiz'];
+  'Lagerort', 'geöffnet?', 'im AMS', 'Spulenart', 'Notiz', 'Preis'];
 
 function csvCell(v) {
   const s = String(v ?? '');
@@ -463,6 +518,7 @@ export function toCsv(spools, settings) {
     lines.push([
       s.nr ?? '', s.material, s.brand, s.colorName, s.colorHex, s.purchaseWeight, grossOf(s, settings), s.netWeight,
       s.location, s.opened ? 'ja' : 'nein', s.inAms ? 'ja' : 'nein', spoolTypeOf(s, settings).name, s.note,
+      s.price === null ? '' : String(s.price).replace('.', ','),
     ].map(csvCell).join(';'));
   }
   return '﻿' + lines.join('\r\n') + '\r\n';
@@ -524,6 +580,7 @@ const HEADER_ALIASES = {
   inAms: ['imams', 'ams'],
   spoolType: ['spulenart', 'spule', 'spooltype'],
   note: ['notiz', 'bemerkung', 'note', 'notizen', 'kommentar'],
+  price: ['preis', 'kaufpreis', 'price', 'kosten'],
 };
 
 function headerKey(h) {
@@ -567,6 +624,7 @@ export function spoolsFromRows(rows, settings) {
       opened: rec.opened,
       inAms: rec.inAms,
       note: rec.note,
+      price: rec.price,
     }));
   }
   return spools;

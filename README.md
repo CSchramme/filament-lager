@@ -21,6 +21,7 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
   Slot, Paket, neues Paket).
 - **Rollennummern**: Jede Rolle hat eine feste Nummer (#1, #2, …), die sich nie ändert und nach
   dem Löschen nicht neu vergeben wird. Gut zum Aufschreiben auf die Spule; die Suche findet `#12`.
+- **Rechner**: STL oder 3MF hochladen, Rolle wählen, Preis ablesen (siehe unten).
 - **API** zum Abrufen: Bestand je Farbe, Material und Platz, einzelne Rollen über ihre Nummer,
   AMS-Belegung (siehe unten).
 - Suchen, filtern (im AMS, geöffnet, ungeöffnet, knapp) und sortieren.
@@ -187,6 +188,31 @@ sein, damit andere Programme den Status lesen dürfen.
 Den Füllstand in Prozent meldet das AMS nur für Bambu-Spulen mit RFID-Chip. Für andere Spulen
 bleibt Wiegen der genaue Weg.
 
+## Rechner
+
+Unter **Rechner** eine STL- oder 3MF-Datei hochladen (die Datei bleibt auf dem Gerät), eine Rolle
+aus dem Lager wählen und den Preis ablesen:
+
+| Posten | Rechnung |
+|---|---|
+| Material | Gramm × Preis pro Gramm der Rolle |
+| Abnutzung | 5 % auf das Material |
+| Selbstkosten | Material + Abnutzung |
+| Gewinn | 10 % auf die Selbstkosten |
+| **Preis pro Stück** | Selbstkosten + Gewinn, dazu der Preis für die eingegebene Stückzahl |
+
+- **Gramm:** Bei einer in Bambu Studio geslicten 3MF (Datei → Exportieren → „Plattenschnitt-Datei“
+  bzw. `.gcode.3mf`) nimmt der Rechner die genauen Gramm und zeigt die Druckzeit. Bei einer STL oder
+  ungeslicten 3MF schätzt er aus Volumen und Oberfläche (Außenhaut voll, Inneres mit 15 % Infill,
+  einstellbar). Stützen sind in der Schätzung nicht enthalten. Gramm lassen sich auch von Hand eintragen.
+- **Preis pro Gramm:** aus dem Preis der Rolle (im Bearbeiten-Dialog „Preis der Rolle in €“), sonst
+  aus dem Standardpreis pro kg unter Einstellungen.
+- Abnutzung und Gewinn sind unter Einstellungen voreingestellt (5 % und 10 %) und lassen sich
+  im Rechner für die einzelne Rechnung ändern.
+- Der Rechner zeigt, ob die gewählte Rolle reicht, und schlägt sonst Rollen in derselben Farbe vor.
+  „… g von #5 abziehen“ verbucht den Druck direkt im Lager. „Angebot kopieren“ legt einen kurzen
+  Text mit Modell, Farbe und Preis in die Zwischenablage.
+
 ## API
 
 Andere Programme (Home Assistant, Skripte, Waagen, Dashboards) können den Bestand lesen und das
@@ -279,6 +305,7 @@ Aufbau:
   - `js/seed.js` – Startbestand aus der Excel-Tabelle
 - `start.cjs` – Startdatei für Plesk, `src/server.js` – Start, `src/app.js` – HTTP-Schnittstelle,
   `src/auth.js` – Anmeldung, `src/store.js` – Datendatei
+- `public/js/calculator.js` – Rechner, `public/js/model.js` – STL/3MF lesen
 - `src/api-v1.js` – API mit Schlüssel (lesen, Gramm ändern)
 - `src/bambu/cloud.js` – Bambu Cloud (Anmeldung, Filament Manager)
 - `src/bambu/sync.js` – Abgleich Lager ↔ Filament Manager

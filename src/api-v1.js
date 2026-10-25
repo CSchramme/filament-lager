@@ -46,6 +46,7 @@ export function spoolOut(s, settings) {
     platz: place.label,
     spulenart: spoolTypeOf(s, settings).name,
     notiz: s.note,
+    preis_eur: s.price,
     bambu_id: s.bambu.cloudId,
     rfid: s.bambu.rfid || null,
     geaendert: s.updatedAt,

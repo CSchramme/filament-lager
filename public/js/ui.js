@@ -25,6 +25,15 @@ const nf1 = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 1, maximumFr
 
 export const fmt = (n) => nf.format(Math.round(n));
 export const fmtKg = (grams) => nf1.format(grams / 1000);
+const eur = new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' });
+export const fmtEur = (v) => eur.format(v);
+export const fmtNum = (v, digits = 1) => new Intl.NumberFormat('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(v);
+
+export function fmtDuration(seconds) {
+  const m = Math.round(seconds / 60);
+  if (m < 60) return `${m} Min.`;
+  return `${Math.floor(m / 60)} Std. ${m % 60} Min.`;
+}
 
 export function timeAgo(iso) {
   if (!iso) return 'nie';
