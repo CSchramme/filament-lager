@@ -113,11 +113,11 @@ test('Gewicht schätzen und Preis mit Abnutzung und Gewinn', () => {
   // 100 g zu 2 ct: Material 2,00 €, Abnutzung 5 % = 0,10 €, Gewinn 10 % auf 2,10 € = 0,21 €
   assert.deepEqual(priceQuote({ grams: 100, perGram: 0.02, wearPct: 5, profitPct: 10, qty: 3 }),
     { grams: 100, material: 2, energy: 0, base: 2, wear: 0.1, cost: 2.1, profit: 0.21, piece: 2.31, qty: 3, total: 6.93, totalGrams: 300 });
-  // Mit Strom: 2 Std. bei 120 W und 0,35 €/kWh = 0,084 € -> 0,08 €; Abnutzung auf Filament + Strom
+  // Mit Strom: 2 Std. bei 120 W und 0,30 €/kWh = 0,072 € -> 0,07 €; Abnutzung auf Filament + Strom
   const strom = energyCost(7200, settings);
-  assert.ok(Math.abs(strom - 0.084) < 1e-9);
+  assert.ok(Math.abs(strom - 0.072) < 1e-9);
   assert.deepEqual(priceQuote({ grams: 100, perGram: 0.02, energy: strom, wearPct: 5, profitPct: 10 }),
-    { grams: 100, material: 2, energy: 0.08, base: 2.08, wear: 0.1, cost: 2.18, profit: 0.22, piece: 2.4, qty: 1, total: 2.4, totalGrams: 100 });
+    { grams: 100, material: 2, energy: 0.07, base: 2.07, wear: 0.1, cost: 2.17, profit: 0.22, piece: 2.39, qty: 1, total: 2.39, totalGrams: 100 });
   assert.deepEqual(['1:24', '1,5', '90 min', '2h', '', 'bald'].map(parseDuration), [5040, 5400, 5400, 7200, null, null]);
 });
 

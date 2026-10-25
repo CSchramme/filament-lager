@@ -198,7 +198,7 @@ aus dem Lager wählen und den Preis ablesen:
 | Posten | Rechnung |
 |---|---|
 | Filament | Gramm × Kaufpreis der Rolle ÷ Kaufgewicht |
-| Strom | Druckzeit × Leistung des Druckers × Strompreis (Standard 120 W und 0,35 € pro kWh) |
+| Strom | Druckzeit × Leistung des Druckers × Strompreis (Standard 120 W und 0,30 € pro kWh) |
 | Abnutzung | 5 % auf Filament + Strom |
 | Selbstkosten | Filament + Strom + Abnutzung |
 | Gewinn | 10 % auf die Selbstkosten |

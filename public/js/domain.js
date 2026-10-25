@@ -70,7 +70,7 @@ export function defaultSettings() {
     pricePerKg: 20,
     wearPct: 5,
     profitPct: 10,
-    energyPrice: 0.35, // € pro kWh
+    energyPrice: 0.3, // € pro kWh
     printerWatts: 120, // mittlere Leistung beim Drucken
     places: [],
   };
