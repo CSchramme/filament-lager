@@ -201,8 +201,8 @@ aus dem Lager wählen und den Preis ablesen:
 | Gewinn | 10 % auf die Selbstkosten |
 | **Preis pro Stück** | Selbstkosten + Gewinn, dazu der Preis für die eingegebene Stückzahl |
 
-- **Gramm:** Bei einer in Bambu Studio geslicten 3MF (Datei → Exportieren → „Plattenschnitt-Datei“
-  bzw. `.gcode.3mf`) nimmt der Rechner die genauen Gramm und zeigt die Druckzeit. Bei einer STL oder
+- **Gramm:** Bei einer in Bambu Studio geslicten 3MF (nach dem Slicen über Datei → Exportieren die
+  geslicte Platte als `.gcode.3mf` speichern) nimmt der Rechner die genauen Gramm und zeigt die Druckzeit. Bei einer STL oder
   ungeslicten 3MF schätzt er aus Volumen und Oberfläche (Außenhaut voll, Inneres mit 15 % Infill,
   einstellbar). Stützen sind in der Schätzung nicht enthalten. Gramm lassen sich auch von Hand eintragen.
 - **Preis pro Gramm:** aus dem Preis der Rolle (im Bearbeiten-Dialog „Preis der Rolle in €“), sonst
