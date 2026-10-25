@@ -382,7 +382,8 @@ export function normalizeSaleItem(input) {
   const qty = Math.max(1, toInt(src.qty, 1));
   let breakdown = null;
   if (src.breakdown && typeof src.breakdown === 'object') {
-    breakdown = Object.fromEntries(BREAKDOWN_KEYS.map((k) => [k, Math.max(0, toMoney(src.breakdown[k]) ?? 0)]));
+    // Der Gewinn darf negativ sein (unter Selbstkosten verkauft), alles andere nicht.
+    breakdown = Object.fromEntries(BREAKDOWN_KEYS.map((k) => [k, k === 'profit' ? toMoney(src.breakdown[k]) ?? 0 : Math.max(0, toMoney(src.breakdown[k]) ?? 0)]));
   }
   const piece = breakdown ? breakdown.piece : null;
   return {
@@ -395,6 +396,8 @@ export function normalizeSaleItem(input) {
     colorName: str(src.colorName),
     colorHex: normHex(src.colorHex),
     taskId: str(src.taskId),
+    stockId: str(src.stockId), // aus dem Vorrat verkauft
+    batchQty: Math.max(1, toInt(src.batchQty, qty)), // auf so viele Teile ist die Arbeit verteilt
     breakdown,
     // Beträge für alle Stück dieser Position
     price: piece !== null ? cents(piece * qty) : Math.max(0, toMoney(src.price) ?? 0),
@@ -435,6 +438,119 @@ export function normalizeSale(input, { now = new Date().toISOString() } = {}) {
     energy: cents(items.reduce((a, i) => a + i.energy, 0)),
     createdAt: str(src.createdAt) || now,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Vorrat: auf Vorrat gedruckte Teile (z. B. 25 Kürbisse auf einer Platte), die
+// einzeln verkauft werden. Die Kosten pro Teil stammen aus dem Druck, die
+// Arbeit ist auf alle Teile des Drucks verteilt. Der Verkaufspreis ist fest.
+
+const COST_KEYS = ['filament', 'energy', 'machine', 'failure', 'labor'];
+
+function costParts(src) {
+  const b = src && typeof src === 'object' ? src : {};
+  const parts = Object.fromEntries(COST_KEYS.map((k) => [k, Math.max(0, toMoney(b[k]) ?? 0)]));
+  parts.cost = cents(COST_KEYS.reduce((a, k) => a + parts[k], 0));
+  return parts;
+}
+
+export function normalizeStockItem(input, { now = new Date().toISOString() } = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  const made = Math.max(0, toInt(src.made, 0));
+  return {
+    id: str(src.id) || newId(),
+    title: str(src.title) || 'Teil',
+    onHand: Math.max(0, toInt(src.onHand, made)), // noch da
+    made, // insgesamt gedruckt
+    sold: Math.max(0, toInt(src.sold, 0)),
+    batchQty: Math.max(1, toInt(src.batchQty, made || 1)), // Teile pro Druck, für den Beleg
+    price: Math.max(0, toMoney(src.price) ?? 0), // Verkaufspreis pro Stück
+    parts: costParts(src.parts), // Selbstkosten pro Stück
+    grams: Math.max(0, Math.round((Number(src.grams) || 0) * 10) / 10), // pro Stück
+    seconds: Math.max(0, Math.round(Number(src.seconds) || 0)), // pro Stück
+    spoolNr: toInt(src.spoolNr, null),
+    material: str(src.material),
+    colorName: str(src.colorName),
+    colorHex: normHex(src.colorHex),
+    createdAt: str(src.createdAt) || now,
+    updatedAt: now,
+  };
+}
+
+// Neuer Druck auf Vorrat aus einer Preisrechnung mit qty Teilen.
+export function stockFromQuote({
+  title, quote, spool = null, price,
+}) {
+  return {
+    title,
+    made: quote.qty,
+    onHand: quote.qty,
+    batchQty: quote.qty,
+    price: price ?? quote.piece,
+    parts: Object.fromEntries(COST_KEYS.map((k) => [k, quote[k]])),
+    grams: quote.grams,
+    seconds: quote.seconds,
+    spoolNr: spool ? spool.nr : null,
+    material: spool ? spool.material : '',
+    colorName: spool ? spool.colorName : '',
+    colorHex: spool ? spool.colorHex : '',
+  };
+}
+
+// Gleiches Teil noch einmal gedruckt: Stückzahl dazu, Kosten gewichtet gemittelt.
+export function mergeStock(item, batch) {
+  const add = normalizeStockItem(batch);
+  const n = item.onHand + add.onHand;
+  const avg = (a, b) => (n ? (a * item.onHand + b * add.onHand) / n : b);
+  return normalizeStockItem({
+    ...item,
+    onHand: n,
+    made: item.made + add.made,
+    batchQty: Math.round(avg(item.batchQty, add.batchQty)),
+    parts: Object.fromEntries(COST_KEYS.map((k) => [k, cents(avg(item.parts[k], add.parts[k]))])),
+    grams: avg(item.grams, add.grams),
+    seconds: avg(item.seconds, add.seconds),
+    price: item.price || add.price,
+  });
+}
+
+// Position für einen Beleg: Kosten aus dem Vorrat, Preis fest (oder abweichend).
+export function stockSaleItem(item, qty = 1, price = item.price) {
+  const p = item.parts;
+  return {
+    title: item.title,
+    qty,
+    grams: item.grams,
+    seconds: item.seconds,
+    spoolNr: item.spoolNr,
+    material: item.material,
+    colorName: item.colorName,
+    colorHex: item.colorHex,
+    stockId: item.id,
+    batchQty: item.batchQty,
+    breakdown: {
+      ...Object.fromEntries(COST_KEYS.map((k) => [k, p[k]])), cost: p.cost, profit: cents(price - p.cost), piece: cents(price),
+    },
+  };
+}
+
+// Vorrat beim Verkauf abbuchen (sign -1) oder beim Löschen zurückbuchen (+1).
+// Wirft, wenn nicht genug da ist; dann bleibt alles unverändert.
+export function applyStockSale(stock, sale, sign = -1) {
+  const wanted = new Map();
+  for (const i of sale.items) if (i.stockId) wanted.set(i.stockId, (wanted.get(i.stockId) || 0) + i.qty);
+  for (const [id, qty] of wanted) {
+    const item = stock.find((x) => x.id === id);
+    if (item && sign < 0 && item.onHand < qty) {
+      throw new Error(`Von „${item.title}“ sind nur noch ${item.onHand} Stück im Vorrat.`);
+    }
+  }
+  for (const [id, qty] of wanted) {
+    const item = stock.find((x) => x.id === id);
+    if (!item) continue; // Vorrat inzwischen gelöscht
+    item.onHand = Math.max(0, item.onHand + sign * qty);
+    item.sold = Math.max(0, item.sold - sign * qty);
+  }
 }
 
 // Angebot: aufgebaut wie ein Beleg, dazu gültig bis und ob daraus ein Beleg wurde.

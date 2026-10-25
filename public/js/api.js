@@ -2,8 +2,8 @@
 // alle Änderungen dorthin. Ohne Server (z. B. als statische Seite) speichert
 // das Lager im Browser; die Bambu-Anbindung ist dann nicht verfügbar.
 import {
-  assignNumbers, newId, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings,
-  normalizeSpool, placeList, planMove, planPlaces, saleFromOffer, salesSummary,
+  applyStockSale, assignNumbers, mergeStock, newId, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
+  normalizeSettings, normalizeSpool, normalizeStockItem, placeList, planMove, planPlaces, saleFromOffer, salesSummary,
 } from './domain.js';
 import { seedSpools } from './seed.js';
 
@@ -46,6 +46,10 @@ class ServerBackend {
   notifySettings() { return this.req('GET', 'api/benachrichtigungen'); }
   saveNotify(body) { return this.req('PUT', 'api/benachrichtigungen', body); }
   testNotify() { return this.req('POST', 'api/benachrichtigungen/test', {}); }
+  stock() { return this.req('GET', 'api/vorrat'); }
+  addStock(item) { return this.req('POST', 'api/vorrat', item); }
+  updateStock(id, patch) { return this.req('PUT', 'api/vorrat/' + encodeURIComponent(id), patch); }
+  deleteStock(id) { return this.req('DELETE', 'api/vorrat/' + encodeURIComponent(id)); }
   offers() { return this.req('GET', 'api/angebote'); }
   addOffer(offer) { return this.req('POST', 'api/angebote', offer); }
   acceptOffer(id) { return this.req('POST', 'api/angebote/' + encodeURIComponent(id) + '/beleg', {}); }
@@ -125,6 +129,7 @@ class LocalBackend {
         powerPayments: (Array.isArray(raw.powerPayments) ? raw.powerPayments : []).map((x) => normalizePowerPayment(x)),
         offers: (Array.isArray(raw.offers) ? raw.offers : []).map((x) => normalizeOffer(x)),
         offerSeq: raw.offerSeq || {},
+        stock: (Array.isArray(raw.stock) ? raw.stock : []).map((x) => normalizeStockItem(x, { now: x.updatedAt })),
       };
       // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
       for (const sale of [...data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(data, sale.date);
@@ -132,7 +137,7 @@ class LocalBackend {
       return assignNumbers(data);
     }
     const data = {
-      settings: normalizeSettings(), spools: seedSpools(), nextNr: 1, sales: [], receiptSeq: {}, powerPayments: [], offers: [], offerSeq: {},
+      settings: normalizeSettings(), spools: seedSpools(), nextNr: 1, sales: [], receiptSeq: {}, powerPayments: [], offers: [], offerSeq: {}, stock: [],
     };
     this.write(data);
     return data;
@@ -190,7 +195,7 @@ class LocalBackend {
   }
 
   salesView(data) {
-    return { sales: data.sales, summary: salesSummary(data.sales) };
+    return { sales: data.sales, summary: salesSummary(data.sales), stock: data.stock };
   }
 
   async sales() {
@@ -200,6 +205,7 @@ class LocalBackend {
   async addSale(sale) {
     const data = this.load();
     const created = normalizeSale({ ...sale, id: undefined, createdAt: undefined });
+    applyStockSale(data.stock, created, -1);
     created.nr = nextReceiptNr(data, created.date);
     data.sales.unshift(created);
     this.write(data);
@@ -211,6 +217,46 @@ class LocalBackend {
     data.sales = data.sales.map((x) => (x.id === id ? normalizeSale({ ...x, ...patch, id: x.id, nr: x.nr, createdAt: x.createdAt }) : x));
     this.write(data);
     return this.salesView(data);
+  }
+
+  async stock() {
+    return { stock: this.load().stock };
+  }
+
+  async addStock(input) {
+    const data = this.load();
+    const batch = normalizeStockItem({ ...input, id: undefined, sold: 0 });
+    if (!batch.made) throw new Error('Bitte angeben, wie viele Teile gedruckt wurden.');
+    const idx = input.merge === false ? -1 : data.stock.findIndex((x) => x.title.toLowerCase() === batch.title.toLowerCase());
+    let item;
+    if (idx >= 0) {
+      item = mergeStock(data.stock[idx], batch);
+      data.stock[idx] = item;
+    } else {
+      item = batch;
+      data.stock.unshift(item);
+    }
+    this.write(data);
+    return { item, merged: idx >= 0, stock: data.stock };
+  }
+
+  async updateStock(id, patch) {
+    const data = this.load();
+    const idx = data.stock.findIndex((x) => x.id === id);
+    if (idx < 0) throw new Error('Teil nicht im Vorrat.');
+    const cur = data.stock[idx];
+    data.stock[idx] = normalizeStockItem({
+      ...cur, title: patch.title ?? cur.title, price: patch.price ?? cur.price, onHand: patch.onHand ?? cur.onHand,
+    });
+    this.write(data);
+    return { item: data.stock[idx], stock: data.stock };
+  }
+
+  async deleteStock(id) {
+    const data = this.load();
+    data.stock = data.stock.filter((x) => x.id !== id);
+    this.write(data);
+    return { stock: data.stock };
   }
 
   async offers() {
@@ -232,6 +278,7 @@ class LocalBackend {
     if (!offer) throw new Error('Angebot nicht gefunden.');
     if (offer.saleNr) throw new Error(`Aus diesem Angebot wurde schon Beleg ${offer.saleNr}.`);
     const sale = normalizeSale(saleFromOffer(offer));
+    applyStockSale(data.stock, sale, -1);
     sale.nr = nextReceiptNr(data, sale.date);
     data.sales.unshift(sale);
     Object.assign(offer, { saleId: sale.id, saleNr: sale.nr, acceptedAt: new Date().toISOString() });
@@ -269,6 +316,8 @@ class LocalBackend {
 
   async deleteSale(id) {
     const data = this.load();
+    const sale = data.sales.find((x) => x.id === id);
+    if (sale) applyStockSale(data.stock, sale, +1);
     data.sales = data.sales.filter((x) => x.id !== id);
     this.write(data);
     return this.salesView(data);

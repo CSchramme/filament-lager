@@ -64,7 +64,7 @@ function splitRows(item, rates) {
     ['Strom', h ? `${fmtNum(h, 2)} Std. × ${fmtNum(rates.printerWatts, 0)} W × ${fmtCt(rates.energyPrice)} ct/kWh` : '', b.energy],
     ['Drucker (Abnutzung)', h ? `${fmtNum(h, 2)} Std. × ${fmtEur(rates.machineRate)}` : '', b.machine],
     ['Fehldrucke', `${fmtNum(rates.failPct, 0)} % auf Filament und Strom`, b.failure],
-    ['Arbeit', item.qty > 1 ? 'anteilig pro Teil' : '', b.labor],
+    ['Arbeit', item.batchQty > 1 ? `anteilig, ${item.batchQty} Stück gedruckt` : '', b.labor],
   ];
   const line = (label, note, v, cls = '') => `<tr class="split ${cls}"><td></td><td>${label}${note ? ` <span class="sub">${esc(note)}</span>` : ''}</td><td class="r"></td><td class="r">${fmtEur(v)}</td><td class="r">${fmtEur(v * item.qty)}</td></tr>`;
   return rows.map(([l, n, v], i) => line(l, n, v, i === 0 ? 'first' : '')).join('')

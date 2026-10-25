@@ -718,3 +718,20 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
 .table-view th, .table-view td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; }
 .table-view .r { text-align: right; }
 .empty-chart { margin: 24px 0; }
+
+/* Vorrat */
+.stock-list { display: grid; }
+.stock-row { display: grid; grid-template-columns: minmax(0, 1fr) 6.5em 5.5em auto; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.stock-row.sold-out { opacity: .65; }
+.stock-title { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.stock-count { display: grid; justify-items: end; text-align: right; }
+.stock-count strong { font-family: var(--font-display); font-stretch: 112%; font-size: var(--step-1); }
+.stock-price { text-align: right; }
+.stock-actions { display: inline-flex; gap: 6px; align-items: center; }
+@media (max-width: 560px) {
+  .stock-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .stock-title { grid-column: 1 / -1; }
+  .stock-count { justify-items: start; justify-content: start; text-align: left; grid-template-columns: auto auto; gap: 6px; align-items: baseline; }
+  .stock-price { text-align: left; }
+  .stock-actions { grid-column: 1 / -1; }
+}

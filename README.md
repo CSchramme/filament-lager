@@ -26,6 +26,8 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
 - **Drucke**: Belege mit der Aufteilung des Preises pro Teil, Angebote, die mit einem Klick zum
   Beleg werden, Umsatz und Gewinn, Stromabrechnung für den, der den Strom bezahlt, und der
   Druckverlauf von Bambu mit Kosten je Druck.
+- **Vorrat**: mehrere gleiche Teile auf einmal drucken (z. B. 25 Kürbisse) und einzeln verkaufen;
+  die Arbeit verteilt sich auf alle Teile, der Vorrat zählt mit.
 - **Etiketten mit QR-Code** zum Aufkleben auf die Spulen. Scannen mit der Handykamera öffnet die
   Rolle direkt zum Wiegen.
 - **Einkaufsliste**: was knapp ist und keinen Ersatz im Lager hat, mit dem zuletzt bezahlten Preis.
@@ -273,6 +275,38 @@ Unter **Drucke**:
 Den Druckverlauf liefert die inoffizielle Bambu-Schnittstelle (`/v1/user-service/my/tasks`); bekannt
 sind die Status „fertig“ und „abgebrochen“.
 
+## Vorrat: viele gleiche Teile, einzeln verkauft
+
+Für Teile, die du auf einmal druckst und nach und nach verkaufst, z. B. 25 Kürbisse auf einer
+Platte:
+
+1. **Auf Vorrat legen**: im **Rechner** die Anzahl eintragen (25) und „Auf Vorrat legen“ tippen,
+   oder im **Druckverlauf** bei dem Druck „Auf Vorrat“ und angeben, wie viele Teile auf der Platte
+   waren. Gramm und Druckzeit werden dann auf die Teile verteilt. Im Dialog den festen
+   **Verkaufspreis pro Stück** eintragen; Selbstkosten und Gewinn pro Stück stehen darunter.
+2. **Verkaufen**: unter **Drucke → Vorrat** bei dem Teil auf „Verkaufen“. Anzahl, Preis, Datum und
+   Kunde, dann „Verkauft“: Das speichert gleich einen Beleg (auf Wunsch zum Drucken) und zieht die
+   Teile vom Vorrat ab. „In den offenen Beleg“ legt sie stattdessen zu anderen Positionen.
+3. Der Vorrat zeigt, wie viele noch da sind. Ein gelöschter Beleg bringt die Teile zurück. Über
+   den Stift lassen sich Name, Preis und Bestand ändern (z. B. wenn einer kaputt gegangen ist).
+
+Warum das wichtig ist: Die Arbeit (5 Min. pro Auftrag) zählt nur einmal für alle 25 Teile.
+Beispiel Kürbis, 12 g und 6 Std. für die ganze Platte:
+
+| | auf Vorrat (25 Stück) | einzeln als Auftrag |
+|---|---|---|
+| Filament | 0,24 € | 0,24 € |
+| Strom | 0,01 € | 0,01 € |
+| Drucker | 0,07 € | 0,07 € |
+| Fehldrucke | 0,03 € | 0,03 € |
+| Arbeit | 0,05 € | 1,25 € |
+| **Selbstkosten** | **0,40 €** | **1,60 €** |
+
+Teile aus dem Vorrat haben einen festen Preis, deshalb gilt für sie kein Mindestpreis. Druckst
+du dasselbe Teil noch einmal (gleicher Name), kommt die neue Menge dazu und die Kosten werden
+gemittelt. Das Filament zieht der Bambu-Abgleich ab; im Rechner lässt es sich beim Anlegen auch
+von Hand abziehen.
+
 ## Etiketten mit QR-Code
 
 Unter **Lager → Etiketten** die Spulen auswählen (vorausgewählt sind die, die gerade in der Liste
@@ -427,6 +461,7 @@ Aufbau:
 - `public/js/calculator.js` – Rechner, `public/js/model.js` – STL/3MF lesen
 - `public/js/prints.js` – Belege, Angebote, Strom und Druckverlauf, `public/js/sales.js` – offener
   Beleg, `public/js/documents.js` – druckbare Belege, Angebote und Abrechnungen
+- `public/js/stock.js` – Vorrat (anlegen, verkaufen, ändern)
 - `public/js/qr.js` – QR-Codes (ohne Bibliothek), `public/js/labels.js` – Etiketten,
   `public/js/shopping.js` – Einkaufsliste
 - `public/js/stats.js` – Zahlen der Auswertung, `public/js/charts.js` – Diagramme,

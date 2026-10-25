@@ -1,8 +1,8 @@
 // HTTP-Schnittstelle des Filament-Lagers und Auslieferung der Weboberfläche.
 import express from 'express';
 import {
-  colorNameFor, newId, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings,
-  normalizeSpool, planMove, planPlaces, saleFromOffer, salesSummary,
+  applyStockSale, colorNameFor, mergeStock, newId, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
+  normalizeSettings, normalizeSpool, normalizeStockItem, planMove, planPlaces, saleFromOffer, salesSummary,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import {
@@ -342,12 +342,22 @@ export function createApp({
     res.json(tasksView());
   });
 
-  const salesView = () => ({ sales: store.data.sales, summary: salesSummary(store.data.sales) });
+  const salesView = () => ({ sales: store.data.sales, summary: salesSummary(store.data.sales), stock: store.data.stock });
 
   app.get('/api/verkaeufe', (req, res) => res.json(salesView()));
 
+  // Teile aus dem Vorrat abbuchen; reicht der Vorrat nicht, wird nichts gespeichert.
+  function takeFromStock(sale) {
+    try {
+      applyStockSale(store.data.stock, sale, -1);
+    } catch (err) {
+      throw new HttpError(409, err.message);
+    }
+  }
+
   app.post('/api/verkaeufe', async (req, res) => {
     const sale = normalizeSale({ ...(req.body || {}), id: undefined, createdAt: undefined });
+    takeFromStock(sale);
     sale.nr = nextReceiptNr(store.data, sale.date);
     store.data.sales.unshift(sale);
     await store.save();
@@ -364,6 +374,8 @@ export function createApp({
   });
 
   app.delete('/api/verkaeufe/:id', async (req, res) => {
+    const sale = store.data.sales.find((x) => x.id === req.params.id);
+    if (sale) applyStockSale(store.data.stock, sale, +1); // Teile zurück in den Vorrat
     store.data.sales = store.data.sales.filter((x) => x.id !== req.params.id);
     await store.save();
     res.json(salesView());
@@ -435,6 +447,7 @@ export function createApp({
     if (!offer) throw new HttpError(404, 'Angebot nicht gefunden.');
     if (offer.saleNr) throw new HttpError(409, `Aus diesem Angebot wurde schon Beleg ${offer.saleNr}.`);
     const sale = normalizeSale(saleFromOffer(offer, { date: (req.body && req.body.date) || '' }));
+    takeFromStock(sale);
     sale.nr = nextReceiptNr(store.data, sale.date);
     store.data.sales.unshift(sale);
     Object.assign(offer, { saleId: sale.id, saleNr: sale.nr, acceptedAt: new Date().toISOString() });
@@ -448,6 +461,48 @@ export function createApp({
     store.data.offers = store.data.offers.filter((x) => x.id !== req.params.id);
     await store.save();
     res.json(offersView());
+  });
+
+  // Vorrat: auf Vorrat gedruckte Teile, die einzeln verkauft werden.
+  const stockView = () => ({ stock: store.data.stock });
+
+  app.get('/api/vorrat', (req, res) => res.json(stockView()));
+
+  // Gleicher Name wie ein vorhandenes Teil: Stückzahl dazu (merge: false legt neu an).
+  app.post('/api/vorrat', async (req, res) => {
+    const b = req.body || {};
+    const batch = normalizeStockItem({ ...b, id: undefined, sold: 0 });
+    if (!batch.made) throw new HttpError(400, 'Bitte angeben, wie viele Teile gedruckt wurden.');
+    const idx = b.merge === false ? -1 : store.data.stock.findIndex((x) => x.title.toLowerCase() === batch.title.toLowerCase());
+    let item;
+    if (idx >= 0) {
+      item = mergeStock(store.data.stock[idx], batch);
+      store.data.stock[idx] = item;
+    } else {
+      item = batch;
+      store.data.stock.unshift(item);
+    }
+    await store.save();
+    res.status(201).json({ item, merged: idx >= 0, ...stockView() });
+  });
+
+  // Ändern: Name, Preis, Bestand (z. B. eins kaputt), nicht die Kosten.
+  app.put('/api/vorrat/:id', async (req, res) => {
+    const idx = store.data.stock.findIndex((x) => x.id === req.params.id);
+    if (idx < 0) throw new HttpError(404, 'Teil nicht im Vorrat.');
+    const b = req.body || {};
+    const cur = store.data.stock[idx];
+    store.data.stock[idx] = normalizeStockItem({
+      ...cur, title: b.title ?? cur.title, price: b.price ?? cur.price, onHand: b.onHand ?? cur.onHand,
+    });
+    await store.save();
+    res.json({ item: store.data.stock[idx], ...stockView() });
+  });
+
+  app.delete('/api/vorrat/:id', async (req, res) => {
+    store.data.stock = store.data.stock.filter((x) => x.id !== req.params.id);
+    await store.save();
+    res.json(stockView());
   });
 
   // Stromabrechnungen (wer den Strom bezahlt, bekommt den Betrag).

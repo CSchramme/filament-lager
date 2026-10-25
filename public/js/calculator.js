@@ -6,6 +6,7 @@ import {
 } from './domain.js';
 import { parseModelFile } from './model.js';
 import { addPosition, draftTotals, loadDraft } from './sales.js';
+import { addStockDialog } from './stock.js';
 import {
   esc, fmt, fmtCt, fmtDuration, fmtEur, fmtNum, patchText, ring, toast,
 } from './ui.js';
@@ -142,6 +143,7 @@ function bind() {
     if (b.dataset.calc === 'copy') copyOffer();
     if (b.dataset.calc === 'book') bookPrint();
     if (b.dataset.calc === 'add') addToReceipt();
+    if (b.dataset.calc === 'stock') addToStock();
     if (b.dataset.calc === 'receipt') ctx.go('drucke');
     if (b.dataset.calc === 'save-price') savePrice();
   });
@@ -257,7 +259,8 @@ function overrides() {
   return o;
 }
 
-function quote() {
+// Preisrechnung für qty Teile (Standard: Anzahl im Rechner).
+function quote(qty = calc.qty) {
   const g = gramsPerPiece();
   if (!g) return null;
   const spool = selectedSpool();
@@ -266,7 +269,7 @@ function quote() {
   const seconds = printSeconds();
   return {
     ...priceQuote({
-      grams: g.grams, perGram, seconds, qty: calc.qty,
+      grams: g.grams, perGram, seconds, qty,
     }, rates),
     perGram, spool, source: g.source, rates,
   };
@@ -326,6 +329,7 @@ function updateResult(full = true) {
     ${stock}
     <div class="actions">
       <button class="btn primary" type="button" data-calc="add">Zum Beleg hinzufügen</button>
+      <button class="btn" type="button" data-calc="stock">Auf Vorrat legen${q.qty > 1 ? ` (${q.qty} Stück)` : ''}</button>
       <button class="btn" type="button" data-calc="copy">Angebot kopieren</button>
       ${s ? `<button class="btn" type="button" data-calc="book">${fmtNum(need)} g von #${s.nr} abziehen</button>` : ''}
     </div>
@@ -363,9 +367,27 @@ async function copyOffer() {
   }
 }
 
+const modelTitle = () => (calc.job ? calc.job.title : calc.model ? calc.model.name.replace(/\.(gcode\.)?(stl|3mf)$/i, '') : 'Druck');
+
+// Mehrere gleiche Teile auf Vorrat, die später einzeln verkauft werden.
+function addToStock() {
+  const q = quote();
+  addStockDialog(ctx.app, {
+    title: modelTitle(),
+    qty: q.qty,
+    quoteFor: (n) => quote(n),
+    spool: q.spool,
+    canBook: true,
+    onDone() {
+      updateSpools(); // Gramm der Rolle, falls abgezogen
+      updateResult();
+    },
+  });
+}
+
 function addToReceipt() {
   const q = quote();
-  const title = calc.job ? calc.job.title : calc.model ? calc.model.name.replace(/\.(gcode\.)?(stl|3mf)$/i, '') : 'Druck';
+  const title = modelTitle();
   const draft = addPosition({
     title, qty: q.qty, grams: q.grams, seconds: q.seconds, perGram: q.perGram, overrides: overrides(), spool: q.spool,
     taskId: calc.job ? calc.job.id : '',

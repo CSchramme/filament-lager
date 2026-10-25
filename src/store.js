@@ -3,7 +3,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  assignNumbers, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, placeList,
+  assignNumbers, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool,
+  normalizeStockItem, placeList,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import { normalizeNotify } from './notify.js';
@@ -60,12 +61,13 @@ export class Store {
       this.data.offers = (Array.isArray(raw.offers) ? raw.offers : []).map((x) => normalizeOffer(x));
       this.data.offerSeq = raw.offerSeq || {};
       this.data.notify = normalizeNotify(raw.notify);
+      this.data.stock = (Array.isArray(raw.stock) ? raw.stock : []).map((x) => normalizeStockItem(x, { now: x.updatedAt }));
       assignNumbers(this.data);
       this.data.settings.places = placeList(this.data.settings, this.data.spools);
     } else {
       this.data = {
         version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '', tasks: [], sales: [], receiptSeq: {}, powerPayments: [],
-        offers: [], offerSeq: {}, notify: normalizeNotify(),
+        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [],
       };
       await this.save();
     }

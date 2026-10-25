@@ -2,15 +2,16 @@
 // Stromabrechnung für den, der den Strom zahlt, und der Druckverlauf aus der
 // Bambu Cloud mit Kosten je Druck.
 import {
-  jobQuote, offerStatus, openPower, salesSummary,
+  jobQuote, offerStatus, openPower, priceQuote, salesSummary,
 } from './domain.js';
 import { openJob } from './calculator.js';
 import { openPowerStatement, openReceipt } from './documents.js';
 import {
   addPosition, draftTotals, loadDraft, positionBreakdown, saleFromDraft, saveDraft,
 } from './sales.js';
+import { addStockDialog, editStockDialog, sellDialog } from './stock.js';
 import {
-  esc, fmtCt, fmtDuration, fmtEur, fmtNum, openDialog, patchText, timeAgo, toast,
+  esc, fmtCt, fmtDuration, fmtEur, fmtNum, icons, openDialog, patchText, timeAgo, toast,
 } from './ui.js';
 
 const STATUS = { 2: ['ok', 'fertig'], 3: ['crit', 'abgebrochen'] };
@@ -20,6 +21,7 @@ let history = { connected: false, lastSync: '', tasks: [] };
 let sales = { sales: [], summary: salesSummary([]) };
 let payments = [];
 let offers = [];
+let stock = [];
 let powerSince = ''; // abweichender Beginn der offenen Stromabrechnung (yyyy-mm-dd)
 
 const num = (v) => Number(String(v).replace(/\s|€/g, '').replace(',', '.'));
@@ -33,6 +35,7 @@ export async function renderPrints(root, app, { go }) {
   ctx = { root, app, go };
   root.innerHTML = `
     <section class="panel" id="draft"></section>
+    <section class="panel" id="stock"></section>
     <section class="panel" id="offers" hidden></section>
     <section class="panel" id="sales"><div class="panel-head"><h2>Belege</h2></div><p class="small muted">Lädt …</p></section>
     <section class="panel" id="power"><div class="panel-head"><h2>Strom</h2></div><p class="small muted">Lädt …</p></section>
@@ -40,6 +43,7 @@ export async function renderPrints(root, app, { go }) {
   root.querySelector('#draft').addEventListener('click', onDraftClick);
   root.querySelector('#draft').addEventListener('input', onDraftInput);
   root.querySelector('#draft').addEventListener('change', onDraftChange);
+  root.querySelector('#stock').addEventListener('click', onStockClick);
   root.querySelector('#offers').addEventListener('click', onOffersClick);
   root.querySelector('#sales').addEventListener('click', onSalesClick);
   root.querySelector('#power').addEventListener('click', onPowerClick);
@@ -49,16 +53,28 @@ export async function renderPrints(root, app, { go }) {
   try {
     let power;
     let offerList;
-    [history, sales, power, offerList] = await Promise.all([app.backend.tasks(), app.backend.sales(), app.backend.powerPayments(), app.backend.offers()]);
+    let stockList;
+    [history, sales, power, offerList, stockList] = await Promise.all([
+      app.backend.tasks(), app.backend.sales(), app.backend.powerPayments(), app.backend.offers(), app.backend.stock(),
+    ]);
     payments = power.payments;
     offers = offerList.offers;
+    stock = stockList.stock;
   } catch (err) {
     toast(err.message, 'error');
   }
+  updateStock();
   updateOffers();
   updateSales();
   updatePower();
   updateHistory();
+}
+
+// Verkaufs- und Angebotsantworten bringen den Vorrat mit.
+function takeSales(res) {
+  sales = { sales: res.sales, summary: res.summary };
+  if (res.stock) stock = res.stock;
+  updateStock();
 }
 
 function tile(label, value, hint = '') {
@@ -86,7 +102,9 @@ function draftHtml() {
   const rows = t.lines.map((p) => {
     const b = p.breakdown;
     const auto = p.manual ? null : positionBreakdown({ ...p, piecePrice: null }, settings).piece;
+    const left = p.stockId ? (stock.find((x) => x.id === p.stockId) || { onHand: 0 }).onHand : null;
     const meta = [
+      left !== null ? `<span class="${left < p.qty ? 'neg' : ''}">aus dem Vorrat, noch ${left}</span>` : '',
       p.colorName || p.material ? `${p.colorHex ? `<span class="dot-color" style="background:${esc(p.colorHex)}"></span>` : ''}${esc([p.material, p.colorName].filter(Boolean).join(' '))}${p.spoolNr ? ` #${p.spoolNr}` : ''}` : '',
       p.grams ? `${fmtNum(p.grams)} g` : '',
       p.seconds ? fmtDuration(p.seconds) : '',
@@ -155,7 +173,10 @@ function onDraftInput(e) {
 
 // Nach dem Verlassen eines Feldes ganz neu zeichnen (Platzhalter, Aufteilung).
 function onDraftChange(e) {
-  if (e.target.dataset.field) updateDraft();
+  if (e.target.dataset.field) {
+    updateDraft();
+    updateStock();
+  }
 }
 
 async function onDraftClick(e) {
@@ -166,10 +187,12 @@ async function onDraftClick(e) {
     const id = b.closest('.draft-row').dataset.id;
     editDraft((d) => { d.positions = d.positions.filter((p) => p.id !== id); });
     updateDraft();
+    updateStock();
   }
   if (action === 'clear') {
     saveDraft({ positions: [], customer: '', note: '' });
     updateDraft();
+    updateStock();
   }
   if (action === 'manual') manualDialog();
   if (action === 'create') await createReceipt(b);
@@ -207,8 +230,8 @@ async function createReceipt(btn) {
     const res = await ctx.app.backend.addSale(saleFromDraft(draft, settings, {
       date: draft.date || today(), customer: draft.customer || '', note: draft.note || '',
     }));
-    sales = res;
     saveDraft({ positions: [], customer: '', note: '' });
+    takeSales(res);
     updateDraft();
     updateSales();
     updatePower();
@@ -238,6 +261,60 @@ async function createOffer(btn) {
   } catch (err) {
     toast(err.message, 'error');
     btn.disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Vorrat
+
+function updateStock() {
+  const el = ctx.root.querySelector('#stock');
+  const draft = loadDraft();
+  const inDraft = (id) => draft.positions.filter((p) => p.stockId === id).reduce((a, p) => a + p.qty, 0);
+  const list = [...stock].sort((a, b) => Number(b.onHand > 0) - Number(a.onHand > 0) || a.title.localeCompare(b.title, 'de'));
+  const pieces = stock.reduce((a, x) => a + x.onHand, 0);
+  const value = stock.reduce((a, x) => a + x.onHand * x.price, 0);
+  el.innerHTML = `<div class="panel-head"><h2>Vorrat</h2><p>${pieces ? `${pieces} ${pieces === 1 ? 'Teil' : 'Teile'}, Verkaufswert ${fmtEur(value)}` : 'auf Vorrat gedruckt, einzeln verkaufen'}</p></div>
+    ${list.length ? `<div class="stock-list">${list.map((x) => {
+    const reserved = inDraft(x.id);
+    const profit = x.price - x.parts.cost;
+    return `<div class="stock-row${x.onHand ? '' : ' sold-out'}" data-id="${esc(x.id)}">
+        <div class="stock-title"><strong>${esc(x.title)}</strong>
+          <span class="small muted">${x.colorHex ? `<span class="dot-color" style="background:${esc(x.colorHex)}"></span>` : ''}${esc([x.material, x.colorName].filter(Boolean).join(' '))}${x.material || x.colorName ? ' · ' : ''}Selbstkosten ${fmtEur(x.parts.cost)}, Gewinn <span class="${profit < 0 ? 'neg' : ''}">${fmtEur(profit)}</span> pro Stück</span></div>
+        <div class="stock-count"><strong class="num">${x.onHand}</strong><span class="small muted">${x.onHand ? `von ${x.made}` : 'ausverkauft'}${reserved ? ` · ${reserved} im Beleg` : ''}</span></div>
+        <span class="num stock-price">${fmtEur(x.price)}</span>
+        <span class="stock-actions"><button type="button" class="btn small primary" data-stock="sell" ${x.onHand ? '' : 'disabled'}>Verkaufen</button>
+          <button type="button" class="icon-btn" data-stock="edit" aria-label="${esc(x.title)} ändern">${icons.edit}</button></span>
+      </div>`;
+  }).join('')}</div>` : `<p class="muted">Mehrere gleiche Teile auf einmal gedruckt, z. B. 25 Kürbisse? Leg sie auf Vorrat: im Rechner die Anzahl eintragen und „Auf Vorrat legen“,
+      oder unten im Druckverlauf bei einem Druck „Auf Vorrat“. Dann verkaufst du sie einzeln, der Vorrat zählt mit, und die Arbeit ist auf alle Teile verteilt.</p>`}`;
+}
+
+function onStockClick(e) {
+  const b = e.target.closest('[data-stock]');
+  if (!b) return;
+  const item = stock.find((x) => x.id === b.closest('.stock-row').dataset.id);
+  if (!item) return;
+  if (b.dataset.stock === 'sell') {
+    sellDialog(ctx.app, item, {
+      onSold(res) {
+        takeSales(res);
+        updateSales();
+        updatePower();
+      },
+      onDraft() {
+        updateDraft();
+        updateStock();
+      },
+    });
+  }
+  if (b.dataset.stock === 'edit') {
+    editStockDialog(ctx.app, item, {
+      onDone(res) {
+        stock = res.stock;
+        updateStock();
+      },
+    });
   }
 }
 
@@ -281,7 +358,7 @@ async function onOffersClick(e) {
     try {
       const res = await ctx.app.backend.acceptOffer(offer.id);
       offers = res.offers;
-      sales = { sales: res.sales, summary: res.summary };
+      takeSales(res);
       updateOffers();
       updateSales();
       updatePower();
@@ -345,10 +422,10 @@ function onSalesClick(e) {
       body: `<p>Beleg ${esc(sale.nr)} vom ${dateDe(sale.date)} über ${fmtEur(sale.price)} wird gelöscht. Die Nummer wird nicht neu vergeben.</p>`,
       foot: '<button type="button" class="btn" data-close>Abbrechen</button><span class="spacer"></span><button type="submit" class="btn danger solid">Löschen</button>',
       async onSubmit() {
-        sales = await ctx.app.backend.deleteSale(sale.id);
+        takeSales(await ctx.app.backend.deleteSale(sale.id));
         updateSales();
         updatePower();
-        toast('Beleg gelöscht');
+        toast(sale.items.some((i) => i.stockId) ? 'Beleg gelöscht, die Teile sind wieder im Vorrat' : 'Beleg gelöscht');
       },
     });
   }
@@ -468,6 +545,7 @@ function taskCard(t) {
     </div>
     <div class="actions task-actions">
       <button class="btn small primary" type="button" data-task="add">Zum Beleg</button>
+      <button class="btn small" type="button" data-task="stock">Auf Vorrat</button>
       <button class="btn small" type="button" data-task="calc">Im Rechner</button>
       <button class="btn small" type="button" data-task="reprint">Erneut drucken</button>
     </div>
@@ -525,6 +603,25 @@ async function onHistoryClick(e) {
     updateDraft();
     toast(`„${task.title}“ zum Beleg hinzugefügt (${plural(draft.positions.length, 'Position', 'Positionen')})`);
     ctx.root.querySelector('#draft').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  if (b.dataset.task === 'stock') {
+    // Ein Druck mit n Teilen auf der Platte: Gramm und Zeit pro Teil, Arbeit verteilt
+    const q = quoteFor(task);
+    const main = q.parts.filter((p) => p.spool).sort((a, c) => c.grams - a.grams)[0];
+    addStockDialog(ctx.app, {
+      title: task.title,
+      qty: 1,
+      perPlate: true,
+      spool: main ? main.spool : null,
+      quoteFor: (n) => priceQuote({
+        grams: q.grams / n, perGram: q.perGram, seconds: q.seconds / n, qty: n,
+      }, ctx.app.settings),
+      onDone(res) {
+        stock = res.stock;
+        updateStock();
+        ctx.root.querySelector('#stock').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      },
+    });
   }
   if (b.dataset.task === 'reprint') reprintDialog(task);
 }

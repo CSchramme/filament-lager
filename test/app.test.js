@@ -422,3 +422,45 @@ test('Druckstatus vom Drucker löst Benachrichtigungen aus', async () => {
   delete printers.status;
   await call('PUT', '/api/benachrichtigungen', { enabled: false });
 });
+
+test('Vorrat: anlegen, einzeln verkaufen, Beleg löschen bringt Teile zurück', async () => {
+  const parts = {
+    filament: 0.24, energy: 0.01, machine: 0.07, failure: 0.03, labor: 0.05,
+  };
+  const made = await call('POST', '/api/vorrat', {
+    title: 'Kürbis', made: 25, batchQty: 25, price: '2,50', parts, grams: 12, seconds: 864, colorName: 'Orange',
+  });
+  assert.equal(made.status, 201);
+  const item = made.body.item;
+  assert.deepEqual([item.onHand, item.parts.cost, made.body.merged], [25, 0.4, false]);
+  assert.equal((await call('POST', '/api/vorrat', { title: 'Leer', made: 0 })).status, 400);
+  // Gleicher Name: dazu statt neu
+  const again = await call('POST', '/api/vorrat', { title: 'kürbis', made: 5, parts, price: 3 });
+  assert.deepEqual([again.body.merged, again.body.item.onHand, again.body.item.made, again.body.stock.length], [true, 30, 30, 1]);
+
+  const breakdown = { ...parts, cost: 0.4, profit: 2.1, piece: 2.5 };
+  const sold = await call('POST', '/api/verkaeufe', { date: '2026-10-25', items: [{ title: 'Kürbis', qty: 1, stockId: item.id, batchQty: 25, breakdown }] });
+  assert.equal(sold.status, 201);
+  assert.deepEqual([sold.body.sale.price, sold.body.stock[0].onHand, sold.body.stock[0].sold], [2.5, 29, 1]);
+  const tooMany = await call('POST', '/api/verkaeufe', { items: [{ title: 'Kürbis', qty: 40, stockId: item.id, breakdown }] });
+  assert.equal(tooMany.status, 409);
+  assert.match(tooMany.body.error, /nur noch 29 Stück/);
+  const del = await call('DELETE', '/api/verkaeufe/' + sold.body.sale.id);
+  assert.deepEqual([del.body.stock[0].onHand, del.body.stock[0].sold], [30, 0]);
+
+  // Angebot mit Vorrat: erst beim Annehmen abgebucht
+  const offer = await call('POST', '/api/angebote', { items: [{ title: 'Kürbis', qty: 4, stockId: item.id, breakdown }] });
+  assert.equal((await call('GET', '/api/vorrat')).body.stock[0].onHand, 30);
+  const accepted = await call('POST', `/api/angebote/${offer.body.offer.id}/beleg`, {});
+  assert.equal(accepted.body.stock[0].onHand, 26);
+  await call('DELETE', '/api/verkaeufe/' + accepted.body.sale.id);
+  await call('DELETE', '/api/angebote/' + offer.body.offer.id);
+
+  // Korrektur: einer ist kaputt gegangen
+  const fixed = await call('PUT', '/api/vorrat/' + item.id, { onHand: 29, price: 2, parts: { filament: 99 } });
+  assert.deepEqual([fixed.body.item.onHand, fixed.body.item.price, fixed.body.item.parts.cost, fixed.body.item.made], [29, 2, 0.4, 30]);
+  assert.equal((await call('PUT', '/api/vorrat/gibtsnicht', {})).status, 404);
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'lager.json'), 'utf8'));
+  assert.equal(saved.stock[0].onHand, 29);
+  assert.deepEqual((await call('DELETE', '/api/vorrat/' + item.id)).body.stock, []);
+});

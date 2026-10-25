@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  defaultSettings, nextOfferNr, normalizeOffer, normalizeSale, normalizeSpool, offerStatus, saleFromOffer, shoppingList, stockValue,
+  applyStockSale, defaultSettings, mergeStock, nextOfferNr, normalizeOffer, normalizeSale, normalizeSpool, normalizeStockItem, offerStatus,
+  priceQuote, saleFromOffer, shoppingList, stockFromQuote, stockSaleItem, stockValue,
 } from '../public/js/domain.js';
+import {
+  addPosition, draftTotals, loadDraft, saleFromDraft, saveDraft,
+} from '../public/js/sales.js';
 import { computeStats, monthsFor } from '../public/js/stats.js';
 import { normalizeNotify, Notifier, validateNotify } from '../src/notify.js';
 
@@ -170,4 +174,65 @@ test('Benachrichtigung: Fehler und Prüfung der Einstellungen', async () => {
   assert.deepEqual(normalizeNotify({ server: 'https://ntfy.sh///', events: { low: false } }).events, {
     done: true, failed: true, paused: true, low: false,
   });
+});
+
+test('Vorrat: 25 Kürbisse auf einer Platte, einzeln verkauft', () => {
+  // 12 g pro Kürbis, 6 Std. für die ganze Platte: Arbeit 1,25 € verteilt auf 25 Teile
+  const q = priceQuote({ grams: 12, perGram: 0.02, seconds: (6 * 3600) / 25, qty: 25 }, settings);
+  const item = normalizeStockItem(stockFromQuote({ title: 'Kürbis', quote: q, price: 2.5 }));
+  assert.deepEqual(item.parts, {
+    filament: 0.24, energy: 0.01, machine: 0.07, failure: 0.03, labor: 0.05, cost: 0.4,
+  });
+  assert.deepEqual([item.onHand, item.made, item.sold, item.batchQty, item.price], [25, 25, 0, 25, 2.5]);
+  // Einzeln als Auftrag gerechnet wäre die Arbeit voll drin und der Mindestpreis griffe
+  const single = priceQuote({ grams: 12, perGram: 0.02, seconds: (6 * 3600) / 25, qty: 1 }, settings);
+  assert.deepEqual([single.cost, single.total], [1.6, 3]);
+
+  // Verkauf eines Kürbis: Kosten aus dem Vorrat, Preis fest
+  const sale = normalizeSale({ items: [stockSaleItem(item, 1, 2.5)] });
+  assert.deepEqual([sale.price, sale.cost, sale.items[0].breakdown.profit, sale.items[0].batchQty, sale.items[0].stockId], [2.5, 0.4, 2.1, 25, item.id]);
+  // Unter Selbstkosten verkauft: Gewinn negativ, der Beleg geht trotzdem auf
+  const cheap = normalizeSale({ items: [stockSaleItem(item, 2, 0.3)] });
+  assert.deepEqual([cheap.price, cheap.cost, cheap.items[0].breakdown.profit], [0.6, 0.8, -0.1]);
+
+  const stock = [item];
+  applyStockSale(stock, sale, -1);
+  assert.deepEqual([item.onHand, item.sold], [24, 1]);
+  assert.throws(() => applyStockSale(stock, normalizeSale({ items: [stockSaleItem(item, 30)] }), -1), /nur noch 24 Stück/);
+  assert.deepEqual([item.onHand, item.sold], [24, 1]); // unverändert
+  applyStockSale(stock, sale, +1); // Beleg gelöscht
+  assert.deepEqual([item.onHand, item.sold], [25, 0]);
+  applyStockSale([], sale, -1); // Vorrat gelöscht: nichts zu tun
+
+  // Noch 10 nachgedruckt, teurer: Kosten gewichtet gemittelt über den Bestand
+  const more = stockFromQuote({ title: 'kürbis', quote: { ...q, qty: 10, filament: 0.31 }, price: 3 });
+  const merged = mergeStock(item, more);
+  assert.deepEqual([merged.onHand, merged.made, merged.price, merged.parts.filament, merged.parts.cost], [35, 35, 2.5, 0.26, 0.42]);
+});
+
+test('Offener Beleg: Vorrat ohne Mindestpreis, gleiche Teile zusammen', () => {
+  saveDraft({ positions: [], customer: '', note: '' });
+  const q = priceQuote({ grams: 12, perGram: 0.02, seconds: 864, qty: 25 }, settings);
+  const item = normalizeStockItem(stockFromQuote({ title: 'Kürbis', quote: q, price: 2 }));
+  addPosition({ stockItem: item });
+  addPosition({ stockItem: item, qty: 2 });
+  let draft = loadDraft();
+  assert.equal(draft.positions.length, 1);
+  assert.equal(draft.positions[0].qty, 3);
+  let t = draftTotals(draft, settings);
+  assert.deepEqual([t.sum, t.minExtra, t.total], [6, 0, 6]);
+  draft.positions[0].qty = 1;
+  t = draftTotals(draft, settings);
+  assert.deepEqual([t.sum, t.minExtra], [2, 0]); // ein Kürbis für 2 €, kein Aufschlag
+  // Mit einem Auftragsteil zusammen gilt der Mindestpreis für den ganzen Beleg
+  draft.positions[0].piecePrice = 0.5;
+  saveDraft(draft);
+  addPosition({ title: 'Clip', qty: 1, grams: 1, seconds: 60, perGram: 0.02 });
+  draft = loadDraft();
+  t = draftTotals(draft, settings);
+  assert.ok(t.sum < 3);
+  assert.equal(t.total, 3);
+  const body = saleFromDraft(draft, settings, { date: '2026-10-25' });
+  assert.deepEqual([body.items[0].stockId, body.items[0].batchQty, body.items[0].breakdown.piece, body.items[0].breakdown.profit], [item.id, 25, 0.5, 0.1]);
+  assert.deepEqual([body.items[1].stockId, body.items[1].batchQty], ['', 1]);
 });
