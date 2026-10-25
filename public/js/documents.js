@@ -38,7 +38,7 @@ const STYLE = `
     @page { size: A4; margin: 16mm; }
   }`;
 
-function openDocument(title, body) {
+export function openDocument(title, body) {
   const w = window.open('', '_blank');
   if (!w) {
     toast('Das Fenster wurde blockiert. Bitte Pop-ups für diese Seite erlauben.', 'error');
@@ -73,8 +73,10 @@ function splitRows(item, rates) {
     + `<tr class="split last sum"><td></td><td>Preis pro Teil</td><td></td><td class="r">${fmtEur(b.piece)}</td><td class="r">${fmtEur(b.piece * item.qty)}</td></tr>`;
 }
 
-export function openReceipt(sale, settings) {
+// sale: Beleg oder Angebot (offer = true: mit "gültig bis", ohne Dank)
+export function openReceipt(sale, settings, { offer = false } = {}) {
   const rates = sale.rates || settings;
+  const kind = offer ? 'Angebot' : 'Beleg';
   const items = sale.items.map((item, i) => {
     const desc = [
       item.material || item.colorName ? `${item.colorHex ? `<span class="swatch" style="background:${esc(item.colorHex)}"></span>` : ''}${esc([item.material, item.colorName].filter(Boolean).join(' '))}${item.spoolNr ? ` (Rolle #${item.spoolNr})` : ''}` : '',
@@ -89,7 +91,8 @@ export function openReceipt(sale, settings) {
     <div class="head">
       <div>${settings.sellerName ? `<div class="label">Von</div><strong>${esc(settings.sellerName)}</strong><div class="addr">${esc(settings.sellerAddress)}</div>` : ''}
         ${sale.customer ? `<div class="label" style="margin-top:16px">An</div><div class="addr">${esc(sale.customer)}</div>` : ''}</div>
-      <div class="meta"><h1>Beleg</h1><div>Nr. ${esc(sale.nr || '–')}</div><div>Datum ${date(sale.date)}</div></div>
+      <div class="meta"><h1>${kind}</h1><div>Nr. ${esc(sale.nr || '–')}</div><div>Datum ${date(sale.date)}</div>
+        ${offer ? `<div>Gültig bis ${date(sale.validUntil)}</div>` : ''}${!offer && sale.fromOffer ? `<div>Zu Angebot ${esc(sale.fromOffer)}</div>` : ''}</div>
     </div>
     <table>
       <thead><tr><th>Pos.</th><th>Artikel</th><th class="r">Menge</th><th class="r">pro Teil</th><th class="r">Gesamt</th></tr></thead>
@@ -101,9 +104,9 @@ export function openReceipt(sale, settings) {
     <div class="foot">
       ${settings.smallBusiness ? '<div>Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.</div>' : ''}
       ${sale.note ? `<div>${esc(sale.note)}</div>` : ''}
-      <div>Vielen Dank!</div>
+      <div>${offer ? `Das Angebot gilt bis ${date(sale.validUntil)}. Ich freue mich auf den Auftrag.` : 'Vielen Dank!'}</div>
     </div>`;
-  openDocument(`Beleg ${sale.nr || ''}`, body);
+  openDocument(`${kind} ${sale.nr || ''}`, body);
 }
 
 // power: Ergebnis von openPower() oder eine gespeicherte Abrechnung;

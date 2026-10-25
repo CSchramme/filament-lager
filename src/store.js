@@ -3,9 +3,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  assignNumbers, nextReceiptNr, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, placeList,
+  assignNumbers, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, placeList,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
+import { normalizeNotify } from './notify.js';
 
 function emptyBambu() {
   return {
@@ -24,6 +25,7 @@ export class Store {
     this.file = file;
     this.data = null;
     this.queue = Promise.resolve();
+    this.beforeSave = null; // z. B. Benachrichtigung bei knappen Rollen
   }
 
   async load() {
@@ -55,11 +57,15 @@ export class Store {
       // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
       for (const sale of [...this.data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(this.data, sale.date);
       this.data.powerPayments = (Array.isArray(raw.powerPayments) ? raw.powerPayments : []).map((x) => normalizePowerPayment(x));
+      this.data.offers = (Array.isArray(raw.offers) ? raw.offers : []).map((x) => normalizeOffer(x));
+      this.data.offerSeq = raw.offerSeq || {};
+      this.data.notify = normalizeNotify(raw.notify);
       assignNumbers(this.data);
       this.data.settings.places = placeList(this.data.settings, this.data.spools);
     } else {
       this.data = {
         version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '', tasks: [], sales: [], receiptSeq: {}, powerPayments: [],
+        offers: [], offerSeq: {}, notify: normalizeNotify(),
       };
       await this.save();
     }
@@ -67,6 +73,13 @@ export class Store {
   }
 
   save() {
+    if (this.beforeSave) {
+      try {
+        this.beforeSave();
+      } catch (err) {
+        console.error(err);
+      }
+    }
     // Pakete dauerhaft merken, damit ein leeres Paket nicht verschwindet.
     this.data.settings.places = placeList(this.data.settings, this.data.spools);
     assignNumbers(this.data);

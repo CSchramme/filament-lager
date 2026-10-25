@@ -23,8 +23,16 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
   dem Löschen nicht neu vergeben wird. Gut zum Aufschreiben auf die Spule; die Suche findet `#12`.
 - **Rechner**: STL oder 3MF hochladen, Rolle wählen, Preis mit Filament, Strom, Drucker,
   Fehldrucken, Arbeit und Gewinn ablesen (siehe unten).
-- **Drucke**: Belege mit der Aufteilung des Preises pro Teil, Umsatz und Gewinn, Stromabrechnung
-  für den, der den Strom bezahlt, und der Druckverlauf von Bambu mit Kosten je Druck.
+- **Drucke**: Belege mit der Aufteilung des Preises pro Teil, Angebote, die mit einem Klick zum
+  Beleg werden, Umsatz und Gewinn, Stromabrechnung für den, der den Strom bezahlt, und der
+  Druckverlauf von Bambu mit Kosten je Druck.
+- **Etiketten mit QR-Code** zum Aufkleben auf die Spulen. Scannen mit der Handykamera öffnet die
+  Rolle direkt zum Wiegen.
+- **Einkaufsliste**: was knapp ist und keinen Ersatz im Lager hat, mit dem zuletzt bezahlten Preis.
+- **Benachrichtigungen aufs Handy** (App ntfy): Druck fertig, abgebrochen oder pausiert, Rolle
+  wird knapp.
+- **Auswertung**: Umsatz und Gewinn pro Monat, Filamentverbrauch pro Monat und nach Farbe,
+  Bestseller, Strom und Lagerwert.
 - **API** zum Abrufen: Bestand je Farbe, Material und Platz, einzelne Rollen über ihre Nummer,
   AMS-Belegung (siehe unten).
 - Suchen, filtern (im AMS, geöffnet, ungeöffnet, knapp) und sortieren.
@@ -240,6 +248,10 @@ Unter **Drucke**:
   Hand“ fügt z. B. Versand hinzu. Mit Datum, Kunde und Notiz wird daraus mit „Beleg erstellen“ ein
   Beleg mit fester Nummer (2026-001, 2026-002, …). Der offene Beleg bleibt im Browser, bis er
   erstellt wird.
+- **Angebot**: „Als Angebot speichern“ macht aus dem offenen Beleg ein Angebot mit eigener Nummer
+  (A-2026-001, …) und „gültig bis“ (14 Tage, unter Einstellungen änderbar), zum Drucken oder als
+  PDF. Sagt der Kunde zu, macht „Beleg“ in der Angebotsliste daraus mit einem Klick einen Beleg mit
+  denselben Preisen; der Beleg nennt das Angebot.
 - **Beleg**: öffnet sich in einem neuen Fenster zum Drucken oder „Als PDF sichern“. Unter jeder
   Position steht die Aufteilung pro Teil und für alle Stück: Filament, Strom, Drucker, Fehldrucke,
   Arbeit, Selbstkosten, Gewinn. Name und Adresse für den Beleg und den Hinweis für
@@ -261,6 +273,64 @@ Unter **Drucke**:
 Den Druckverlauf liefert die inoffizielle Bambu-Schnittstelle (`/v1/user-service/my/tasks`); bekannt
 sind die Status „fertig“ und „abgebrochen“.
 
+## Etiketten mit QR-Code
+
+Unter **Lager → Etiketten** die Spulen auswählen (vorausgewählt sind die, die gerade in der Liste
+stehen; mit der Suche z. B. nur `#12`), oder im Bearbeiten-Dialog einer Spule auf „Etikett“. Es
+öffnet sich ein Fenster mit den Etiketten: QR-Code, Rollennummer, Farbe, Material und Leergewicht
+der Spule (hilft beim Wiegen). Formate:
+
+- Etikettendrucker 50 × 30 mm, 40 × 30 mm oder 62 × 29 mm (Brother), ein Etikett pro Seite
+- A4-Bogen mit 3 × 8 Etiketten à 70 × 37 mm (z. B. Avery Zweckform 3474)
+
+Im Druckdialog „Ränder: keine“ und 100 % Größe wählen. Der QR-Code enthält die Adresse des Lagers
+mit `#rolle/12`; mit der Handykamera scannen öffnet die Rolle direkt im Dialog „Gramm ändern“
+(einmal am Handy angemeldet sein). Die Etiketten deshalb über die Adresse drucken, unter der das
+Lager auch am Handy erreichbar ist.
+
+## Einkaufsliste
+
+**Lager → Einkaufsliste** (oder der Link in der Kachel „Knapp“) fasst knappe und leere Rollen nach
+Sorte zusammen (Material, Hersteller, Farbe). Liegt von einer Sorte noch eine volle Rolle im Lager,
+steht sie unter „Ersatz im Lager“ statt unter „Nachkaufen“. Der Preis ist der zuletzt bezahlte für
+diese Sorte, sonst für das Material derselben Marke; dazu eine Summe. „Liste kopieren“ legt sie als
+Text in die Zwischenablage (für eine Notiz oder eine Nachricht), „Drucken“ als Liste zum Abhaken.
+
+## Benachrichtigungen aufs Handy
+
+Die App schickt Nachrichten über [ntfy](https://ntfy.sh), eine kostenlose App für iPhone und
+Android:
+
+1. Die App **ntfy** aus dem App Store oder Google Play installieren.
+2. Unter **Einstellungen → Benachrichtigungen aufs Handy** steht ein zufälliges Thema (z. B.
+   `filament-lager-3f9a…`). In der ntfy-App auf „+“ tippen und dieses Thema abonnieren, oder den
+   QR-Code daneben mit dem Handy scannen.
+3. „Benachrichtigungen einschalten“, speichern und „Testnachricht senden“.
+
+Gemeldet werden: **Druck fertig**, **Druck abgebrochen**, **Druck pausiert** (z. B. Filament leer
+oder ein Fehler am Drucker) und **Rolle wird knapp oder leer**, jedes einzeln abschaltbar. Die
+Druckmeldungen brauchen eine Verbindung zum Drucker (Bambu-Konto oder Heimnetz unter „Bambu“).
+Eine knappe Rolle meldet sich nur einmal, erst nach dem Auffüllen wieder; was beim Einschalten schon
+knapp ist, wird nicht nachgemeldet. Tippen auf die Nachricht öffnet das Lager.
+
+Wer das Thema kennt, kann mitlesen, deshalb ist es zufällig. Wer einen eigenen ntfy-Server
+betreibt, trägt ihn unter „Eigener ntfy-Server“ ein, bei Bedarf mit Zugangstoken. Der Webserver muss
+dafür ins Internet dürfen (bei Plesk üblich).
+
+## Auswertung
+
+Der Reiter **Auswertung** zeigt für einen Zeitraum (letzte 6 oder 12 Monate, dieses Jahr, alles):
+
+- Kennzahlen: Umsatz, Gewinn (mit Anteil am Umsatz), Filament verdruckt, Strom und der heutige
+  Lagerwert (Restgewicht × Kaufpreis der Rolle)
+- **Umsatz und Gewinn pro Monat** aus den Belegen
+- **Filament verdruckt pro Monat** aus den fertigen Drucken im Bambu-Verlauf (ohne Verlauf aus den
+  Belegen)
+- **Verbrauch nach Farbe**, mit dem Namen der passenden Lagerrolle
+- **Bestseller** nach Umsatz, mit Stück und Gewinn (Positionen von Hand wie Versand zählen nicht)
+
+Überfahren oder Antippen zeigt die Werte, „Als Tabelle“ zeigt alle Zahlen zum Nachlesen.
+
 ## API
 
 Andere Programme (Home Assistant, Skripte, Waagen, Dashboards) können den Bestand lesen und das
@@ -275,6 +345,7 @@ der Adresse als `?key=<schlüssel>`.
 | `GET /api/v1/spulen` | Alle Rollen. Filter: `farbe`, `material`, `hersteller` (Teiltreffer), `paket`, `status` (`neu`, `ok`, `knapp`, `leer`), `im_ams` (`true`/`false`) |
 | `GET /api/v1/spulen/12` | Rolle Nummer 12 |
 | `GET /api/v1/ams` | Welche Rolle in welchem AMS-Slot liegt |
+| `GET /api/v1/einkaufsliste` | Knappe Sorten ohne Ersatz (`nachkaufen`) und mit Ersatz im Lager, zuletzt bezahlter Preis pro kg und geschätzte Summe |
 | `POST /api/v1/spulen/12/gewicht` | Gewicht von Rolle 12 ändern, mit genau einem Feld: `rest_g` (Restgewicht), `mit_spule_g` (von der Waage, Tara wird abgezogen) oder `verbraucht_g` (wird abgezogen). `PATCH /api/v1/spulen/12` geht ebenso. |
 
 Beispiel:
@@ -354,6 +425,13 @@ Aufbau:
 - `start.cjs` – Startdatei für Plesk, `src/server.js` – Start, `src/app.js` – HTTP-Schnittstelle,
   `src/auth.js` – Anmeldung, `src/store.js` – Datendatei
 - `public/js/calculator.js` – Rechner, `public/js/model.js` – STL/3MF lesen
+- `public/js/prints.js` – Belege, Angebote, Strom und Druckverlauf, `public/js/sales.js` – offener
+  Beleg, `public/js/documents.js` – druckbare Belege, Angebote und Abrechnungen
+- `public/js/qr.js` – QR-Codes (ohne Bibliothek), `public/js/labels.js` – Etiketten,
+  `public/js/shopping.js` – Einkaufsliste
+- `public/js/stats.js` – Zahlen der Auswertung, `public/js/charts.js` – Diagramme,
+  `public/js/auswertung.js` – Reiter Auswertung
+- `src/notify.js` – Benachrichtigungen über ntfy
 - `src/api-v1.js` – API mit Schlüssel (lesen, Gramm ändern)
 - `src/bambu/cloud.js` – Bambu Cloud (Anmeldung, Filament Manager)
 - `src/bambu/sync.js` – Abgleich Lager ↔ Filament Manager

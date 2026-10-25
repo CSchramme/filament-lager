@@ -238,6 +238,14 @@ export class PrinterManager extends EventEmitter {
     return out;
   }
 
+  // Druckstatus eines Druckers für die Benachrichtigungen.
+  status(printerId) {
+    const conn = this.conns.get(printerId);
+    if (!conn) return null;
+    const { gcodeState, progress, job } = conn.state;
+    return { gcodeState, progress, job };
+  }
+
   findSlot(printerId, slot) {
     const conn = this.conns.get(printerId);
     if (!conn) return null;

@@ -80,6 +80,7 @@ export function defaultSettings() {
     sellerName: '',
     sellerAddress: '',
     smallBusiness: false, // Hinweis § 19 UStG auf dem Beleg
+    offerDays: 14, // so lange gilt ein Angebot
     places: [],
   };
 }
@@ -224,6 +225,7 @@ export function normalizeSettings(input) {
     sellerName: str(src.sellerName),
     sellerAddress: String(src.sellerAddress ?? '').trim(),
     smallBusiness: toBool(src.smallBusiness, base.smallBusiness),
+    offerDays: Math.min(365, Math.max(1, toInt(src.offerDays, base.offerDays))),
     places,
   };
 }
@@ -418,6 +420,7 @@ export function normalizeSale(input, { now = new Date().toISOString() } = {}) {
     note: str(src.note),
     items,
     minExtra, // Aufschlag auf den Mindestpreis
+    fromOffer: str(src.fromOffer), // Nummer des Angebots, aus dem der Beleg entstand
     // Sätze beim Erstellen, damit der Beleg später gleich aussieht
     rates: src.rates && typeof src.rates === 'object' ? {
       energyPrice: Math.max(0, toRate(src.rates.energyPrice) ?? 0),
@@ -432,6 +435,48 @@ export function normalizeSale(input, { now = new Date().toISOString() } = {}) {
     energy: cents(items.reduce((a, i) => a + i.energy, 0)),
     createdAt: str(src.createdAt) || now,
   };
+}
+
+// Angebot: aufgebaut wie ein Beleg, dazu gültig bis und ob daraus ein Beleg wurde.
+export function normalizeOffer(input, { now = new Date().toISOString(), days = 14 } = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  const base = normalizeSale(src, { now });
+  const until = new Date(`${base.date}T12:00:00Z`);
+  until.setUTCDate(until.getUTCDate() + days);
+  return {
+    ...base,
+    validUntil: /^\d{4}-\d{2}-\d{2}$/.test(str(src.validUntil)) ? str(src.validUntil) : until.toISOString().slice(0, 10),
+    saleId: str(src.saleId),
+    saleNr: str(src.saleNr),
+    acceptedAt: str(src.acceptedAt),
+  };
+}
+
+// "offen", "abgelaufen" oder "angenommen"
+export function offerStatus(offer, today = new Date().toISOString().slice(0, 10)) {
+  if (offer.saleNr) return 'angenommen';
+  return offer.validUntil < today ? 'abgelaufen' : 'offen';
+}
+
+// Daten für einen Beleg aus einem Angebot: gleiche Positionen und Preise.
+export function saleFromOffer(offer, { date } = {}) {
+  return {
+    date: date || new Date().toISOString().slice(0, 10),
+    customer: offer.customer,
+    note: offer.note,
+    items: offer.items,
+    minExtra: offer.minExtra,
+    rates: offer.rates,
+    fromOffer: offer.nr,
+  };
+}
+
+// Nächste Angebotsnummer im Jahr: A-2026-001, …
+export function nextOfferNr(data, date) {
+  const year = str(date).slice(0, 4) || new Date().toISOString().slice(0, 4);
+  data.offerSeq = data.offerSeq && typeof data.offerSeq === 'object' ? data.offerSeq : {};
+  data.offerSeq[year] = (toInt(data.offerSeq[year], 0) || 0) + 1;
+  return `A-${year}-${String(data.offerSeq[year]).padStart(3, '0')}`;
 }
 
 // Nächste Belegnummer im Jahr des Belegs: 2026-001, 2026-002, …
@@ -754,6 +799,72 @@ export function summarize(spools, settings) {
     sealed,
     byMaterial: [...byMaterial.values()].sort((a, b) => b.net - a.net),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Einkaufsliste: knappe und leere Rollen, zusammengefasst nach Sorte
+// (Material, Marke, Farbe). Liegt von der Sorte noch eine Rolle mit genug
+// Filament im Lager, steht sie unter "Ersatz da". Der Preis ist der zuletzt
+// bezahlte für diese Sorte, sonst für das Material derselben Marke.
+
+const sortKey = (s) => [s.material, s.brand, (s.colorName || s.colorHex).toLowerCase()].join('|');
+
+function lastPaid(list) {
+  const paid = list.filter((s) => s.price !== null && s.purchaseWeight > 0)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || (b.nr || 0) - (a.nr || 0))[0];
+  if (!paid) return null;
+  return {
+    nr: paid.nr, price: paid.price, weight: paid.purchaseWeight, perKg: cents((paid.price / paid.purchaseWeight) * 1000),
+  };
+}
+
+export function shoppingList(spools, settings) {
+  const groups = new Map();
+  for (const s of spools) {
+    const k = sortKey(s);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(s);
+  }
+  const items = [];
+  for (const list of groups.values()) {
+    const low = list.filter((s) => ['knapp', 'leer'].includes(stockLevel(s, settings)));
+    if (!low.length) continue;
+    const spare = list.filter((s) => !low.includes(s)).sort((a, b) => b.netWeight - a.netWeight);
+    const first = low[0];
+    const ownPrice = lastPaid(list);
+    const price = ownPrice || lastPaid(spools.filter((s) => s.material === first.material && s.brand === first.brand));
+    const weight = price ? price.weight : first.purchaseWeight;
+    items.push({
+      key: sortKey(first),
+      material: first.material,
+      brand: first.brand,
+      colorName: first.colorName,
+      colorHex: first.colorHex,
+      low: low.map((s) => ({ id: s.id, nr: s.nr, netWeight: s.netWeight, level: stockLevel(s, settings) })),
+      spare: spare.map((s) => ({ id: s.id, nr: s.nr, netWeight: s.netWeight, level: stockLevel(s, settings) })),
+      rest: list.reduce((a, s) => a + s.netWeight, 0),
+      buy: !spare.length, // nachkaufen, kein Ersatz im Lager
+      weight, // Kaufgewicht der nächsten Rolle
+      price, // zuletzt bezahlt oder null
+      priceFrom: ownPrice ? 'sorte' : price ? 'material' : '',
+      estimate: price ? cents((price.perKg * weight) / 1000) : null,
+    });
+  }
+  items.sort((a, b) => Number(b.buy) - Number(a.buy) || a.material.localeCompare(b.material, 'de')
+    || (a.colorName || '').localeCompare(b.colorName || '', 'de'));
+  const buy = items.filter((i) => i.buy);
+  return {
+    items,
+    buy,
+    spare: items.filter((i) => !i.buy),
+    total: cents(buy.reduce((a, i) => a + (i.estimate || 0), 0)),
+    unknown: buy.filter((i) => i.estimate === null).length, // ohne bekannten Preis
+  };
+}
+
+// Wert des Filaments im Lager (Restgewicht × Grammpreis der Rolle).
+export function stockValue(spools, settings) {
+  return cents(spools.reduce((a, s) => a + s.netWeight * pricePerGram(s, settings), 0));
 }
 
 // ---------------------------------------------------------------------------

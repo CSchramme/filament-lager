@@ -7,8 +7,12 @@ import {
 import {
   download, esc, fmt, fmtKg, icons, openDialog, readFile, ring, timeAgo, toast,
 } from './ui.js';
+import { renderAuswertung } from './auswertung.js';
 import { renderCalculator } from './calculator.js';
+import { openLabels } from './labels.js';
 import { renderPrints } from './prints.js';
+import { qrSvg } from './qr.js';
+import { openShoppingList } from './shopping.js';
 
 const app = {
   backend: null, spools: [], settings: null, bambu: null, view: 'lager', poll: null, printersSig: '', selected: new Set(),
@@ -148,8 +152,18 @@ function go(view) {
 }
 
 function route() {
+  // QR-Code auf dem Etikett: #rolle/12 öffnet die Rolle zum Wiegen.
+  const scanned = /^#rolle\/(\d+)$/.exec(location.hash);
+  if (scanned) {
+    history.replaceState(null, '', '#lager');
+    route();
+    const spool = app.spools.find((s) => s.nr === Number(scanned[1]));
+    if (spool) weighDialog(spool);
+    else toast(`Rolle #${scanned[1]} gibt es nicht (mehr).`, 'error');
+    return;
+  }
   const v = location.hash.slice(1);
-  app.view = ['lager', 'plaetze', 'rechner', 'drucke', 'bambu', 'einstellungen'].includes(v) ? v : 'lager';
+  app.view = ['lager', 'plaetze', 'rechner', 'drucke', 'auswertung', 'bambu', 'einstellungen'].includes(v) ? v : 'lager';
   document.querySelectorAll('.tab').forEach((t) => {
     if (t.dataset.view === app.view) t.setAttribute('aria-current', 'page');
     else t.removeAttribute('aria-current');
@@ -161,6 +175,7 @@ function route() {
   else if (app.view === 'plaetze') renderPlaces();
   else if (app.view === 'rechner') renderCalculator($view, app, { spoolUpdated, go });
   else if (app.view === 'drucke') renderPrints($view, app, { go });
+  else if (app.view === 'auswertung') renderAuswertung($view, app);
   else if (app.view === 'bambu') renderBambu();
   else renderSettings();
   if (app.backend.mode === 'server') {
@@ -240,7 +255,11 @@ function renderLager() {
         <option value="">Alle Materialien</option>
         ${materials.map((m) => `<option ${m === prefs.material ? 'selected' : ''}>${esc(m)}</option>`).join('')}
       </select>
-      <button class="btn primary" type="button" data-action="add">${icons.plus} Spule</button>
+      <span class="toolbar-actions">
+        <button class="btn" type="button" data-action="shopping">${icons.cart}Einkaufsliste</button>
+        <button class="btn" type="button" data-action="labels">${icons.qr}Etiketten</button>
+        <button class="btn primary" type="button" data-action="add">${icons.plus} Spule</button>
+      </span>
     </section>
     <section class="list" id="list"></section>`;
   updateLager();
@@ -263,7 +282,7 @@ function statsHtml() {
   return `
     <div class="stat"><span class="label">Filament auf Lager</span><span class="value">${fmtKg(sum.totalNet)}<small>kg</small></span><span class="hint">${sum.count} Spulen</span></div>
     <div class="stat"><span class="label">Im AMS</span><span class="value">${sum.inAms}</span><span class="hint">${amsSlots.length ? esc(amsSlots.join(' · ')) : 'Spulen eingelegt'}</span></div>
-    <div class="stat ${short ? 'warn' : ''}"><span class="label">Knapp, unter 1/${app.settings.lowStockPart} der Spule</span><span class="value">${short}</span><span class="hint">${sum.empty ? `davon ${sum.empty} leer` : 'bald nachkaufen'}</span></div>
+    <div class="stat ${short ? 'warn' : ''}"><span class="label">Knapp, unter 1/${app.settings.lowStockPart} der Spule</span><span class="value">${short}</span><span class="hint">${sum.empty ? `davon ${sum.empty} leer · ` : ''}${short ? '<button type="button" class="link" data-action="shopping">Einkaufsliste</button>' : 'bald nachkaufen'}</span></div>
     <div class="stat"><span class="label">Ungeöffnet</span><span class="value">${sum.sealed}</span><span class="hint">volle Reserve</span></div>
     <div class="stat materials"><span class="label">Nach Material</span>
       ${sum.byMaterial.slice(0, 5).map((m) => `<div class="mat-row"><span class="name" title="${esc(m.material)}">${esc(m.material)}</span><span class="bar"><span style="width:${((m.net / max) * 100).toFixed(1)}%"></span></span><span class="num small">${fmtKg(m.net)} kg</span></div>`).join('')
@@ -322,6 +341,30 @@ function rowHtml(s) {
   </article>`;
 }
 
+// Etiketten: vorausgewählt sind die Spulen, die gerade in der Liste stehen.
+function labelsDialog() {
+  const shown = new Set(filteredSpools().map((s) => s.id));
+  const list = [...app.spools].filter((s) => s.nr).sort((a, b) => a.nr - b.nr);
+  openDialog({
+    title: 'Etiketten drucken',
+    body: `<p class="small muted">Jedes Etikett trägt einen QR-Code. Mit der Handykamera scannen, dann öffnet sich die Rolle hier zum Wiegen.</p>
+      <div class="actions"><button type="button" class="btn small" data-all>Alle</button><button type="button" class="btn small" data-none>Keine</button></div>
+      <div class="sync-list">${list.map((s) => `<label class="sync-item"><input type="checkbox" name="spool" value="${esc(s.id)}" ${shown.has(s.id) ? 'checked' : ''}>
+        ${ring(s.colorHex, remainingShare(s))}<span><strong><span class="nr">#${s.nr}</span>${esc(s.colorName || s.colorHex)}</strong> <span class="chg">${esc(s.material)}${s.brand ? ` · ${esc(s.brand)}` : ''}</span></span></label>`).join('')}</div>`,
+    foot: '<span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Etiketten öffnen</button>',
+    onReady(dlg) {
+      const boxes = () => dlg.querySelectorAll('[name="spool"]');
+      dlg.querySelector('[data-all]').addEventListener('click', () => boxes().forEach((i) => { i.checked = true; }));
+      dlg.querySelector('[data-none]').addEventListener('click', () => boxes().forEach((i) => { i.checked = false; }));
+    },
+    onSubmit(form) {
+      const ids = new Set([...form.querySelectorAll('[name="spool"]:checked')].map((i) => i.value));
+      if (!ids.size) throw new Error('Bitte mindestens eine Spule auswählen.');
+      openLabels(list.filter((s) => ids.has(s.id)), app.settings);
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Dialog: Spule anlegen / bearbeiten
 
@@ -373,7 +416,7 @@ function spoolDialog(spool, { copy = false } = {}) {
 
   const foot = isNew
     ? '<button type="button" class="btn" data-close>Abbrechen</button><span class="spacer"></span><button type="submit" class="btn primary">Anlegen</button>'
-    : `<button type="button" class="btn danger" data-del>${icons.trash}Löschen</button><button type="button" class="btn" data-dup>${icons.copy}Duplizieren</button><span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Speichern</button>`;
+    : `<button type="button" class="btn danger" data-del>${icons.trash}Löschen</button><button type="button" class="btn" data-dup>${icons.copy}Duplizieren</button><button type="button" class="btn" data-label>${icons.qr}Etikett</button><span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Speichern</button>`;
 
   openDialog({
     title,
@@ -422,6 +465,7 @@ function spoolDialog(spool, { copy = false } = {}) {
           f.gross.value = Number(f.purchaseWeight.value || 0) + tare();
         }
       });
+      dlg.querySelector('[data-label]')?.addEventListener('click', () => openLabels([spool], app.settings));
       dlg.querySelector('[data-dup]')?.addEventListener('click', () => {
         dlg.close();
         spoolDialog(spool, { copy: true });
@@ -1037,11 +1081,12 @@ function renderSettings() {
           <label class="field"><span>Gewinn (% auf die Selbstkosten)</span><input name="profitPct" inputmode="decimal" value="${dec(app.settings.profitPct)}"></label>
           <label class="field"><span>Mindestpreis pro Beleg (€)</span><input name="minPrice" inputmode="decimal" value="${dec(app.settings.minPrice)}"></label>
         </div>
-        <h3>Beleg und Strom</h3>
+        <h3>Beleg, Angebot und Strom</h3>
         <div class="fields">
           <label class="field"><span>Dein Name auf dem Beleg</span><input name="sellerName" value="${esc(app.settings.sellerName)}" autocomplete="name"></label>
           <label class="field"><span>Wer zahlt den Strom?</span><input name="powerPayee" value="${esc(app.settings.powerPayee)}"></label>
           <label class="field full"><span>Adresse oder Kontakt auf dem Beleg (optional)</span><textarea name="sellerAddress" rows="3">${esc(app.settings.sellerAddress)}</textarea></label>
+          <label class="field"><span>Angebote gelten (Tage)</span><input name="offerDays" inputmode="numeric" value="${app.settings.offerDays}"></label>
         </div>
         <label class="switch"><input type="checkbox" name="smallBusiness" ${app.settings.smallBusiness ? 'checked' : ''}><span>Kleinunternehmer<small>Druckt „Gemäß § 19 UStG wird keine Umsatzsteuer berechnet“ auf den Beleg.</small></span></label>
         <h3>AMS</h3>
@@ -1072,11 +1117,63 @@ function renderSettings() {
         ${app.backend.auth === 'ok' ? '<button class="btn small" type="button" data-action="app-logout">Abmelden</button>' : ''}</div>
     </div>
   </section>
+  <section class="panel">
+    <div class="panel-head"><h2>Benachrichtigungen aufs Handy</h2><p>Druck fertig, abgebrochen oder pausiert, Rolle knapp</p></div>
+    <div id="notify-body" class="small muted">${server ? 'Lädt …' : 'Benachrichtigungen verschickt der Lager-Server. In dieser Browser-Version gibt es sie nicht.'}</div>
+  </section>
   ${server ? `<section class="panel">
     <div class="panel-head"><h2>API</h2><p>Bestand für andere Programme abrufen, z. B. Home Assistant</p></div>
     <div id="api-body" class="small muted">Lädt …</div>
   </section>` : ''}`;
-  if (server) updateApiPanel();
+  if (server) {
+    updateNotifyPanel();
+    updateApiPanel();
+  }
+}
+
+const NOTIFY_EVENTS = [
+  ['done', 'Druck fertig'],
+  ['failed', 'Druck abgebrochen'],
+  ['paused', 'Druck pausiert (z. B. Filament leer)'],
+  ['low', 'Rolle wird knapp oder leer'],
+];
+
+async function updateNotifyPanel() {
+  const el = document.getElementById('notify-body');
+  if (!el) return;
+  let n;
+  try {
+    n = await app.backend.notifySettings();
+  } catch (err) {
+    el.textContent = err.message;
+    return;
+  }
+  const subscribe = `${n.server}/${n.topic}`;
+  el.classList.remove('small', 'muted');
+  el.innerHTML = `<div class="notify-setup">
+      <ol class="steps">
+        <li>Die kostenlose App <strong>ntfy</strong> installieren (App Store oder Google Play).</li>
+        <li>In der App auf „+“ tippen und dieses Thema abonnieren:
+          <span class="copy-row"><input id="notify-topic" readonly value="${esc(n.topic)}" aria-label="Thema"><button class="btn" type="button" data-action="copy" data-target="notify-topic">Kopieren</button></span>
+          ${n.server !== 'https://ntfy.sh' ? `<span class="small muted">Server in der App: ${esc(n.server)}</span>` : ''}</li>
+        <li>Hier einschalten, speichern und eine Testnachricht schicken.</li>
+      </ol>
+      <div class="notify-qr" title="Mit dem Handy scannen öffnet das Thema">${qrSvg(subscribe, { border: 2, title: 'Thema abonnieren' })}<span class="small muted">scannen zum Abonnieren</span></div>
+    </div>
+    <form data-form="notify" class="fields">
+      <label class="switch full"><input type="checkbox" name="enabled" ${n.enabled ? 'checked' : ''}><span>Benachrichtigungen einschalten</span></label>
+      ${NOTIFY_EVENTS.map(([k, label]) => `<label class="switch"><input type="checkbox" name="ev-${k}" ${n.events[k] ? 'checked' : ''}><span>${label}</span></label>`).join('')}
+      <details class="full"><summary>Eigener ntfy-Server</summary>
+        <div class="fields">
+          <label class="field"><span>Server</span><input name="server" value="${esc(n.server)}" inputmode="url"></label>
+          <label class="field"><span>Thema</span><input name="topic" value="${esc(n.topic)}"></label>
+          <label class="field full"><span>Zugangstoken (nur bei geschütztem Server)</span><input name="token" type="password" autocomplete="off" placeholder="${n.hasToken ? 'gespeichert, leer lassen zum Behalten' : 'leer'}"></label>
+        </div>
+      </details>
+      <div class="actions full"><button class="btn primary" type="submit">Speichern</button><button class="btn" type="button" data-action="notify-test">Testnachricht senden</button></div>
+    </form>
+    <p class="small muted">${n.lastError ? `<span class="neg">Letzter Fehler: ${esc(n.lastError)}</span> ` : ''}${n.lastSentAt ? `Zuletzt gesendet ${esc(timeAgo(n.lastSentAt))}. ` : ''}
+      Meldungen zum Druck brauchen eine Verbindung zum Drucker (Bambu-Konto oder Heimnetz unter „Bambu“). Wer das Thema kennt, kann mitlesen, deshalb ist es zufällig.</p>`;
 }
 
 async function updateApiPanel() {
@@ -1176,6 +1273,17 @@ const actions = {
     updatePlaces();
   },
   weigh: (el) => weighDialog(findSpool(el.dataset.id)),
+  'notify-test': (el) => run(async () => {
+    el.disabled = true;
+    try {
+      await app.backend.testNotify();
+      toast('Testnachricht gesendet. Sie sollte gleich auf dem Handy ankommen.');
+    } finally {
+      updateNotifyPanel();
+    }
+  }),
+  shopping: () => openShoppingList(app),
+  labels: () => labelsDialog(),
   'reset-filter': () => {
     Object.assign(prefs, { q: '', chip: 'alle', material: '' });
     savePrefs();
@@ -1334,11 +1442,23 @@ const forms = {
     app.settings = await app.backend.saveSettings({
       ...app.settings, spoolTypes, lowStockPart: f.lowStockPart.value, amsUnits: f.amsUnits.value,
       ...Object.fromEntries(['pricePerKg', 'energyPrice', 'printerWatts', 'machineRate', 'failPct', 'laborMinutes', 'laborRate', 'profitPct', 'minPrice',
-        'sellerName', 'powerPayee', 'sellerAddress'].map((k) => [k, f[k].value])),
+        'sellerName', 'powerPayee', 'sellerAddress', 'offerDays'].map((k) => [k, f[k].value])),
       smallBusiness: f.smallBusiness.checked,
     });
     renderSettings();
     toast('Einstellungen gespeichert');
+  },
+  async notify(f) {
+    await app.backend.saveNotify({
+      enabled: f.enabled.checked,
+      events: Object.fromEntries(NOTIFY_EVENTS.map(([k]) => [k, f['ev-' + k].checked])),
+      server: f.server.value.trim(),
+      topic: f.topic.value.trim(),
+      token: f.token.value,
+      appUrl: location.origin + location.pathname,
+    });
+    await updateNotifyPanel();
+    toast(f.enabled.checked ? 'Benachrichtigungen eingeschaltet' : 'Benachrichtigungen gespeichert (aus)');
   },
   async import(f) {
     const file = f.file.files[0];

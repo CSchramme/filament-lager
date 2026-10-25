@@ -1,8 +1,8 @@
 // HTTP-Schnittstelle des Filament-Lagers und Auslieferung der Weboberfläche.
 import express from 'express';
 import {
-  colorNameFor, newId, nextReceiptNr, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, planMove,
-  planPlaces, salesSummary,
+  colorNameFor, newId, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings,
+  normalizeSpool, planMove, planPlaces, saleFromOffer, salesSummary,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import {
@@ -13,6 +13,9 @@ import { applyPull, applyPush, pullPreview, pushPreview } from './bambu/sync.js'
 import { mergeTasks, taskSummary } from './bambu/tasks.js';
 import { createAuth } from './auth.js';
 import { createPublicApi, newApiKey } from './api-v1.js';
+import {
+  EVENTS, newTopic, normalizeNotify, Notifier, validateNotify,
+} from './notify.js';
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -25,6 +28,7 @@ class HttpError extends Error {
 // bleibt die Schnittstelle gesperrt, damit niemand den Bestand ändern kann.
 export function createApp({
   store, printers, publicDir, password = '', requirePassword = false, cloudFactory = (opts) => new BambuCloud(opts),
+  notifyFetch = (...a) => fetch(...a),
 }) {
   const app = express();
   app.disable('x-powered-by');
@@ -110,8 +114,16 @@ export function createApp({
     }
   }
 
+  // Benachrichtigungen: knappe Rollen bei jedem Speichern, Druckstatus bei jeder Meldung.
+  const notifier = new Notifier({ store, fetchFn: notifyFetch });
+  store.beforeSave = () => notifier.checkStock();
+
   if (printers) {
-    printers.on('update', () => {
+    printers.on('update', (id) => {
+      if (id && typeof printers.status === 'function') {
+        const cfg = printerConfigs().find((c) => c.id === id);
+        notifier.printerUpdate(id, cfg ? cfg.name : '', printers.status(id) || {});
+      }
       if (applyAmsChanges()) store.save().catch((err) => console.error('Speichern fehlgeschlagen:', err.message));
     });
   }
@@ -355,6 +367,87 @@ export function createApp({
     store.data.sales = store.data.sales.filter((x) => x.id !== req.params.id);
     await store.save();
     res.json(salesView());
+  });
+
+  // Benachrichtigungen über ntfy
+  app.get('/api/benachrichtigungen', async (req, res) => {
+    if (!notifier.config.topic) {
+      notifier.config.topic = newTopic();
+      await store.save();
+    }
+    res.json(notifier.view());
+  });
+
+  app.put('/api/benachrichtigungen', async (req, res) => {
+    const b = req.body || {};
+    const cur = notifier.config;
+    const next = normalizeNotify({
+      ...cur,
+      enabled: b.enabled === true,
+      server: b.server ?? cur.server,
+      topic: b.topic ?? cur.topic,
+      token: b.token === undefined ? cur.token : String(b.token), // leer lassen = Token behalten, "-" = löschen
+      appUrl: typeof b.appUrl === 'string' && /^https?:\/\//.test(b.appUrl) ? b.appUrl : cur.appUrl,
+      events: { ...cur.events, ...(b.events && typeof b.events === 'object' ? Object.fromEntries(EVENTS.filter((k) => k in b.events).map((k) => [k, b.events[k] === true])) : {}) },
+    });
+    if (b.token === '') next.token = cur.token;
+    if (b.token === '-') next.token = '';
+    try {
+      validateNotify(next);
+    } catch (err) {
+      throw new HttpError(400, err.message);
+    }
+    const switchedOn = next.enabled && !cur.enabled;
+    store.data.notify = next;
+    if (switchedOn) notifier.markCurrentStock();
+    await store.save();
+    res.json(notifier.view());
+  });
+
+  app.post('/api/benachrichtigungen/test', async (req, res) => {
+    try {
+      await notifier.send({
+        title: 'Filament-Lager', message: 'Test: Benachrichtigungen kommen an.', tags: ['tada'], view: 'lager',
+      });
+    } catch (err) {
+      await store.save();
+      throw new HttpError(502, err.message);
+    }
+    await store.save();
+    res.json(notifier.view());
+  });
+
+  // Angebote: wie ein Beleg, mit eigener Nummer; angenommen wird daraus ein Beleg.
+  const offersView = () => ({ offers: store.data.offers });
+
+  app.get('/api/angebote', (req, res) => res.json(offersView()));
+
+  app.post('/api/angebote', async (req, res) => {
+    const offer = normalizeOffer({ ...(req.body || {}), id: undefined, createdAt: undefined, saleId: '', saleNr: '', acceptedAt: '' }, { days: store.settings.offerDays });
+    offer.nr = nextOfferNr(store.data, offer.date);
+    store.data.offers.unshift(offer);
+    await store.save();
+    res.status(201).json({ offer, ...offersView() });
+  });
+
+  app.post('/api/angebote/:id/beleg', async (req, res) => {
+    const offer = store.data.offers.find((x) => x.id === req.params.id);
+    if (!offer) throw new HttpError(404, 'Angebot nicht gefunden.');
+    if (offer.saleNr) throw new HttpError(409, `Aus diesem Angebot wurde schon Beleg ${offer.saleNr}.`);
+    const sale = normalizeSale(saleFromOffer(offer, { date: (req.body && req.body.date) || '' }));
+    sale.nr = nextReceiptNr(store.data, sale.date);
+    store.data.sales.unshift(sale);
+    Object.assign(offer, { saleId: sale.id, saleNr: sale.nr, acceptedAt: new Date().toISOString() });
+    await store.save();
+    res.status(201).json({
+      sale, offer, ...offersView(), ...salesView(),
+    });
+  });
+
+  app.delete('/api/angebote/:id', async (req, res) => {
+    store.data.offers = store.data.offers.filter((x) => x.id !== req.params.id);
+    await store.save();
+    res.json(offersView());
   });
 
   // Stromabrechnungen (wer den Strom bezahlt, bekommt den Betrag).

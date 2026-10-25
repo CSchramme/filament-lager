@@ -136,3 +136,15 @@ test('Gramm über die API ändern', async () => {
   });
   assert.equal(other.status, 401);
 });
+
+test('Einkaufsliste über die API', async () => {
+  const key = (await fetch(base + '/api/schluessel', { method: 'POST', headers: { cookie } }).then((r) => r.json())).key;
+  const res = await get('/api/v1/einkaufsliste', { 'X-API-Key': key });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.anzahl, res.body.nachkaufen.length);
+  for (const i of [...res.body.nachkaufen, ...res.body.ersatz_im_lager]) {
+    assert.ok(i.knapp.length > 0);
+    assert.deepEqual(Object.keys(i), ['material', 'hersteller', 'farbe', 'farbcode', 'knapp', 'ersatz', 'kaufgewicht_g', 'preis_pro_kg_eur', 'geschaetzt_eur']);
+  }
+  assert.equal((await get('/api/v1/einkaufsliste')).status, 401);
+});

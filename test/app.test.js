@@ -85,6 +85,12 @@ let server;
 let base;
 let dir;
 const printers = new FakePrinters();
+const ntfy = []; // Nachrichten an den nachgebauten ntfy-Server
+const notifyFetch = async (url, opts) => {
+  const body = JSON.parse(opts.body);
+  ntfy.push({ url, body });
+  return body.topic.includes('kaputt') ? { ok: false, status: 500, text: async () => 'down' } : { ok: true, status: 200, text: async () => '' };
+};
 
 async function call(method, url, body) {
   const res = await fetch(base + url, {
@@ -100,7 +106,9 @@ before(async () => {
   const store = new Store(path.join(dir, 'lager.json'));
   await store.load();
   store.bambu.options.autoSync = false; // die Abgleich-Tests rufen alles selbst auf
-  const app = createApp({ store, printers, publicDir: path.join(root, 'public'), cloudFactory: (o) => new FakeCloud(o) });
+  const app = createApp({
+    store, printers, publicDir: path.join(root, 'public'), cloudFactory: (o) => new FakeCloud(o), notifyFetch,
+  });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
   });
@@ -335,4 +343,82 @@ test('Stromabrechnungen speichern und löschen', async () => {
   assert.equal(saved.powerPayments.length, 1);
   const del = await call('DELETE', '/api/strom/' + res.body.payment.id);
   assert.deepEqual(del.body.payments, []);
+});
+
+test('Angebote speichern und mit einem Klick in einen Beleg umwandeln', async () => {
+  const items = [{ title: 'Vase', qty: 1, grams: 90, seconds: 7200, breakdown: { filament: 1.8, energy: 0.07, machine: 0.6, failure: 0.19, labor: 1.25, cost: 3.91, profit: 1.17, piece: 5.08 } }];
+  const created = await call('POST', '/api/angebote', { date: '2026-10-25', customer: 'Nachbarin', items, saleNr: '2026-999' });
+  assert.equal(created.status, 201);
+  assert.deepEqual([created.body.offer.nr, created.body.offer.validUntil, created.body.offer.saleNr, created.body.offer.price], ['A-2026-001', '2026-11-08', '', 5.08]);
+  const id = created.body.offer.id;
+  const before = (await call('GET', '/api/verkaeufe')).body.sales.length;
+  const accepted = await call('POST', `/api/angebote/${id}/beleg`, {});
+  assert.equal(accepted.status, 201);
+  assert.deepEqual([accepted.body.sale.fromOffer, accepted.body.sale.price, accepted.body.sale.customer], ['A-2026-001', 5.08, 'Nachbarin']);
+  assert.equal(accepted.body.offer.saleNr, accepted.body.sale.nr);
+  assert.equal(accepted.body.sales.length, before + 1);
+  const again = await call('POST', `/api/angebote/${id}/beleg`, {});
+  assert.equal(again.status, 409);
+  assert.match(again.body.error, /schon Beleg/);
+  assert.equal((await call('POST', '/api/angebote/gibtsnicht/beleg', {})).status, 404);
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'lager.json'), 'utf8'));
+  assert.deepEqual(saved.offerSeq, { 2026: 1 });
+  assert.equal((await call('DELETE', '/api/angebote/' + id)).body.offers.length, 0);
+  await call('DELETE', '/api/verkaeufe/' + accepted.body.sale.id);
+});
+
+test('Benachrichtigungen einrichten, testen und knappe Rollen melden', async () => {
+  const first = await call('GET', '/api/benachrichtigungen');
+  assert.match(first.body.topic, /^filament-lager-[0-9a-f]{16}$/);
+  assert.equal(first.body.enabled, false);
+  assert.equal((await call('GET', '/api/benachrichtigungen')).body.topic, first.body.topic); // bleibt gleich
+  assert.equal((await call('PUT', '/api/benachrichtigungen', { enabled: true, server: 'ftp://x' })).status, 400);
+  const on = await call('PUT', '/api/benachrichtigungen', {
+    enabled: true, token: 'geheim', appUrl: 'https://lager.example.de/', events: { paused: false, unbekannt: true },
+  });
+  assert.equal(on.status, 200);
+  assert.deepEqual([on.body.enabled, on.body.hasToken, on.body.token], [true, true, undefined]);
+  assert.deepEqual(on.body.events, {
+    done: true, failed: true, paused: false, low: true,
+  });
+  ntfy.length = 0;
+  const t = await call('POST', '/api/benachrichtigungen/test', {});
+  assert.equal(t.status, 200);
+  assert.deepEqual([ntfy[0].url, ntfy[0].body.topic, ntfy[0].body.click], ['https://ntfy.sh/', first.body.topic, 'https://lager.example.de/#lager']);
+  assert.ok(t.body.lastSentAt);
+  // Rolle wird knapp -> genau eine Nachricht
+  const state = (await call('GET', '/api/state')).body;
+  const full = state.spools.find((x) => x.netWeight >= 900);
+  await call('PUT', '/api/spools/' + full.id, { netWeight: 50 });
+  await call('PUT', '/api/spools/' + full.id, { netWeight: 40 });
+  await new Promise((r) => setTimeout(r, 20));
+  const low = ntfy.filter((x) => x.body.title === 'Rolle wird knapp');
+  assert.equal(low.length, 1);
+  assert.match(low[0].body.message, new RegExp(`^#${full.nr} `));
+  await call('PUT', '/api/spools/' + full.id, { netWeight: full.netWeight });
+  // Token bleibt beim Speichern ohne Token, Fehler kommt zurück
+  const kaputt = await call('PUT', '/api/benachrichtigungen', { enabled: true, topic: 'filament-lager-kaputt', token: '' });
+  assert.equal(kaputt.body.hasToken, true);
+  const failed = await call('POST', '/api/benachrichtigungen/test', {});
+  assert.equal(failed.status, 502);
+  assert.match((await call('GET', '/api/benachrichtigungen')).body.lastError, /500/);
+  await call('PUT', '/api/benachrichtigungen', { enabled: false, topic: first.body.topic, token: '-' });
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'lager.json'), 'utf8'));
+  assert.equal(saved.notify.token, '');
+});
+
+test('Druckstatus vom Drucker löst Benachrichtigungen aus', async () => {
+  await call('PUT', '/api/benachrichtigungen', { enabled: true });
+  const id = printers.configs[0].id;
+  printers.status = () => printers.current;
+  ntfy.length = 0;
+  for (const gcodeState of ['RUNNING', 'RUNNING', 'FINISH']) {
+    printers.current = { gcodeState, job: 'Halter', progress: 50 };
+    printers.emit('update', id);
+  }
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(ntfy.map((x) => x.body.title), ['Druck fertig']);
+  assert.match(ntfy[0].body.message, /„Halter“ ist auf .+ fertig\./);
+  delete printers.status;
+  await call('PUT', '/api/benachrichtigungen', { enabled: false });
 });

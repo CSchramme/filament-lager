@@ -1,7 +1,9 @@
-// Reiter "Drucke": offener Beleg, erstellte Belege mit Umsatz und Gewinn,
+// Reiter "Drucke": offener Beleg, Angebote, erstellte Belege mit Umsatz und Gewinn,
 // Stromabrechnung für den, der den Strom zahlt, und der Druckverlauf aus der
 // Bambu Cloud mit Kosten je Druck.
-import { jobQuote, openPower, salesSummary } from './domain.js';
+import {
+  jobQuote, offerStatus, openPower, salesSummary,
+} from './domain.js';
 import { openJob } from './calculator.js';
 import { openPowerStatement, openReceipt } from './documents.js';
 import {
@@ -17,6 +19,7 @@ let ctx = null; // { root, app, go }
 let history = { connected: false, lastSync: '', tasks: [] };
 let sales = { sales: [], summary: salesSummary([]) };
 let payments = [];
+let offers = [];
 let powerSince = ''; // abweichender Beginn der offenen Stromabrechnung (yyyy-mm-dd)
 
 const num = (v) => Number(String(v).replace(/\s|€/g, '').replace(',', '.'));
@@ -30,12 +33,14 @@ export async function renderPrints(root, app, { go }) {
   ctx = { root, app, go };
   root.innerHTML = `
     <section class="panel" id="draft"></section>
+    <section class="panel" id="offers" hidden></section>
     <section class="panel" id="sales"><div class="panel-head"><h2>Belege</h2></div><p class="small muted">Lädt …</p></section>
     <section class="panel" id="power"><div class="panel-head"><h2>Strom</h2></div><p class="small muted">Lädt …</p></section>
     <section class="panel" id="history"><div class="panel-head"><h2>Druckverlauf von Bambu</h2></div><p class="small muted">Lädt …</p></section>`;
   root.querySelector('#draft').addEventListener('click', onDraftClick);
   root.querySelector('#draft').addEventListener('input', onDraftInput);
   root.querySelector('#draft').addEventListener('change', onDraftChange);
+  root.querySelector('#offers').addEventListener('click', onOffersClick);
   root.querySelector('#sales').addEventListener('click', onSalesClick);
   root.querySelector('#power').addEventListener('click', onPowerClick);
   root.querySelector('#power').addEventListener('change', onPowerChange);
@@ -43,11 +48,14 @@ export async function renderPrints(root, app, { go }) {
   updateDraft();
   try {
     let power;
-    [history, sales, power] = await Promise.all([app.backend.tasks(), app.backend.sales(), app.backend.powerPayments()]);
+    let offerList;
+    [history, sales, power, offerList] = await Promise.all([app.backend.tasks(), app.backend.sales(), app.backend.powerPayments(), app.backend.offers()]);
     payments = power.payments;
+    offers = offerList.offers;
   } catch (err) {
     toast(err.message, 'error');
   }
+  updateOffers();
   updateSales();
   updatePower();
   updateHistory();
@@ -104,6 +112,7 @@ function draftHtml() {
     </div>
     <div class="actions">
       <button class="btn primary" type="button" data-draft="create">Beleg erstellen</button>
+      <button class="btn" type="button" data-draft="offer">Als Angebot speichern</button>
       <button class="btn" type="button" data-draft="manual">Position von Hand</button>
       <span class="spacer"></span>
       <button class="btn ghost" type="button" data-draft="clear">Leeren</button>
@@ -164,6 +173,7 @@ async function onDraftClick(e) {
   }
   if (action === 'manual') manualDialog();
   if (action === 'create') await createReceipt(b);
+  if (action === 'offer') await createOffer(b);
 }
 
 function manualDialog() {
@@ -210,6 +220,92 @@ async function createReceipt(btn) {
   }
 }
 
+// Angebot statt Beleg: bekommt eine eigene Nummer und gilt eine Zeit lang.
+async function createOffer(btn) {
+  const draft = loadDraft();
+  const { settings } = ctx.app;
+  btn.disabled = true;
+  try {
+    const res = await ctx.app.backend.addOffer(saleFromDraft(draft, settings, {
+      date: draft.date || today(), customer: draft.customer || '', note: draft.note || '',
+    }));
+    offers = res.offers;
+    saveDraft({ positions: [], customer: '', note: '' });
+    updateDraft();
+    updateOffers();
+    toast(`Angebot ${res.offer.nr} gespeichert`);
+    openReceipt(res.offer, settings, { offer: true });
+  } catch (err) {
+    toast(err.message, 'error');
+    btn.disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Angebote
+
+const OFFER_STATUS = {
+  offen: (o) => `<span class="pill">gilt bis ${dateDe(o.validUntil)}</span>`,
+  abgelaufen: (o) => `<span class="pill knapp">abgelaufen ${dateDe(o.validUntil)}</span>`,
+  angenommen: (o) => `<span class="pill new">Beleg ${esc(o.saleNr)}</span>`,
+};
+
+function updateOffers() {
+  const el = ctx.root.querySelector('#offers');
+  el.hidden = !offers.length;
+  if (!offers.length) return;
+  const open = offers.filter((o) => offerStatus(o, today()) === 'offen');
+  el.innerHTML = `<div class="panel-head"><h2>Angebote</h2><p>${open.length ? `${plural(open.length, 'offenes', 'offene')} über ${fmtEur(open.reduce((a, o) => a + o.price, 0))}` : 'keine offenen'}</p></div>
+    <div class="sale-list">${offers.slice(0, 50).map((o) => {
+    const status = offerStatus(o, today());
+    return `<div class="sale-row offer-row">
+        <span class="num small muted sale-nr"><span>${esc(o.nr)}</span><span>${dateDe(o.date)}</span></span>
+        <button type="button" class="sale-title" data-offer="open" data-id="${esc(o.id)}"><strong>${esc(o.title)}</strong>${o.qty > 1 ? ` <span class="muted">× ${o.qty}</span>` : ''}${o.customer ? `<span class="small muted"> · ${esc(o.customer.split('\n')[0])}</span>` : ''}</button>
+        <span class="num">${fmtEur(o.price)}</span>
+        <span class="offer-state">${OFFER_STATUS[status](o)}${status === 'angenommen' ? '' : ` <button type="button" class="btn small primary" data-offer="accept" data-id="${esc(o.id)}">Beleg</button>`}</span>
+        <button type="button" class="icon-btn" data-offer="delete" data-id="${esc(o.id)}" aria-label="Angebot löschen">×</button>
+      </div>`;
+  }).join('')}</div>
+    <p class="small muted">„Beleg“ macht aus dem Angebot mit einem Klick einen Beleg mit denselben Preisen.</p>`;
+}
+
+async function onOffersClick(e) {
+  const b = e.target.closest('[data-offer]');
+  if (!b) return;
+  const offer = offers.find((o) => o.id === b.dataset.id);
+  if (!offer) return;
+  const { settings } = ctx.app;
+  if (b.dataset.offer === 'open') openReceipt(offer, settings, { offer: true });
+  if (b.dataset.offer === 'accept') {
+    b.disabled = true;
+    try {
+      const res = await ctx.app.backend.acceptOffer(offer.id);
+      offers = res.offers;
+      sales = { sales: res.sales, summary: res.summary };
+      updateOffers();
+      updateSales();
+      updatePower();
+      toast(`Beleg ${res.sale.nr} aus Angebot ${offer.nr} erstellt`);
+      openReceipt(res.sale, settings);
+    } catch (err) {
+      toast(err.message, 'error');
+      b.disabled = false;
+    }
+  }
+  if (b.dataset.offer === 'delete') {
+    openDialog({
+      title: 'Angebot löschen?',
+      body: `<p>Angebot ${esc(offer.nr)} über ${fmtEur(offer.price)} wird gelöscht.${offer.saleNr ? ` Beleg ${esc(offer.saleNr)} bleibt erhalten.` : ''}</p>`,
+      foot: '<button type="button" class="btn" data-close>Abbrechen</button><span class="spacer"></span><button type="submit" class="btn danger solid">Löschen</button>',
+      async onSubmit() {
+        offers = (await ctx.app.backend.deleteOffer(offer.id)).offers;
+        updateOffers();
+        toast('Angebot gelöscht');
+      },
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Belege
 
@@ -228,7 +324,7 @@ function updateSales() {
     </div>
     ${sales.sales.length ? `<div class="sale-list">${sales.sales.slice(0, 50).map((s) => `
       <div class="sale-row">
-        <span class="num small muted">${esc(s.nr)} · ${dateDe(s.date)}</span>
+        <span class="num small muted sale-nr"><span>${esc(s.nr)}</span><span>${dateDe(s.date)}</span></span>
         <button type="button" class="sale-title" data-sales="open" data-id="${esc(s.id)}"><strong>${esc(s.title)}</strong>${s.qty > 1 ? ` <span class="muted">× ${s.qty}</span>` : ''}${s.customer ? `<span class="small muted"> · ${esc(s.customer.split('\n')[0])}</span>` : ''}</button>
         <span class="num">${fmtEur(s.price)}</span>
         <span class="num small ${s.price - s.cost >= 0 ? 'muted' : 'neg'}" title="Gewinn">${s.price - s.cost >= 0 ? '+' : ''}${fmtEur(s.price - s.cost)}</span>

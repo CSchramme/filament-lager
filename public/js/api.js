@@ -2,8 +2,8 @@
 // alle Änderungen dorthin. Ohne Server (z. B. als statische Seite) speichert
 // das Lager im Browser; die Bambu-Anbindung ist dann nicht verfügbar.
 import {
-  assignNumbers, newId, nextReceiptNr, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, placeList, planMove,
-  planPlaces, salesSummary,
+  assignNumbers, newId, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings,
+  normalizeSpool, placeList, planMove, planPlaces, saleFromOffer, salesSummary,
 } from './domain.js';
 import { seedSpools } from './seed.js';
 
@@ -43,6 +43,13 @@ class ServerBackend {
   addSale(sale) { return this.req('POST', 'api/verkaeufe', sale); }
   updateSale(id, patch) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id), patch); }
   deleteSale(id) { return this.req('DELETE', 'api/verkaeufe/' + encodeURIComponent(id)); }
+  notifySettings() { return this.req('GET', 'api/benachrichtigungen'); }
+  saveNotify(body) { return this.req('PUT', 'api/benachrichtigungen', body); }
+  testNotify() { return this.req('POST', 'api/benachrichtigungen/test', {}); }
+  offers() { return this.req('GET', 'api/angebote'); }
+  addOffer(offer) { return this.req('POST', 'api/angebote', offer); }
+  acceptOffer(id) { return this.req('POST', 'api/angebote/' + encodeURIComponent(id) + '/beleg', {}); }
+  deleteOffer(id) { return this.req('DELETE', 'api/angebote/' + encodeURIComponent(id)); }
   powerPayments() { return this.req('GET', 'api/strom'); }
   addPowerPayment(p) { return this.req('POST', 'api/strom', p); }
   deletePowerPayment(id) { return this.req('DELETE', 'api/strom/' + encodeURIComponent(id)); }
@@ -116,13 +123,17 @@ class LocalBackend {
         sales: (Array.isArray(raw.sales) ? raw.sales : []).map((x) => normalizeSale(x)),
         receiptSeq: raw.receiptSeq || {},
         powerPayments: (Array.isArray(raw.powerPayments) ? raw.powerPayments : []).map((x) => normalizePowerPayment(x)),
+        offers: (Array.isArray(raw.offers) ? raw.offers : []).map((x) => normalizeOffer(x)),
+        offerSeq: raw.offerSeq || {},
       };
       // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
       for (const sale of [...data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(data, sale.date);
       data.settings.places = placeList(data.settings, data.spools);
       return assignNumbers(data);
     }
-    const data = { settings: normalizeSettings(), spools: seedSpools(), nextNr: 1, sales: [], receiptSeq: {}, powerPayments: [] };
+    const data = {
+      settings: normalizeSettings(), spools: seedSpools(), nextNr: 1, sales: [], receiptSeq: {}, powerPayments: [], offers: [], offerSeq: {},
+    };
     this.write(data);
     return data;
   }
@@ -200,6 +211,41 @@ class LocalBackend {
     data.sales = data.sales.map((x) => (x.id === id ? normalizeSale({ ...x, ...patch, id: x.id, nr: x.nr, createdAt: x.createdAt }) : x));
     this.write(data);
     return this.salesView(data);
+  }
+
+  async offers() {
+    return { offers: this.load().offers };
+  }
+
+  async addOffer(input) {
+    const data = this.load();
+    const offer = normalizeOffer({ ...input, id: undefined, createdAt: undefined, saleId: '', saleNr: '', acceptedAt: '' }, { days: data.settings.offerDays });
+    offer.nr = nextOfferNr(data, offer.date);
+    data.offers.unshift(offer);
+    this.write(data);
+    return { offer, offers: data.offers };
+  }
+
+  async acceptOffer(id) {
+    const data = this.load();
+    const offer = data.offers.find((x) => x.id === id);
+    if (!offer) throw new Error('Angebot nicht gefunden.');
+    if (offer.saleNr) throw new Error(`Aus diesem Angebot wurde schon Beleg ${offer.saleNr}.`);
+    const sale = normalizeSale(saleFromOffer(offer));
+    sale.nr = nextReceiptNr(data, sale.date);
+    data.sales.unshift(sale);
+    Object.assign(offer, { saleId: sale.id, saleNr: sale.nr, acceptedAt: new Date().toISOString() });
+    this.write(data);
+    return {
+      sale, offer, offers: data.offers, ...this.salesView(data),
+    };
+  }
+
+  async deleteOffer(id) {
+    const data = this.load();
+    data.offers = data.offers.filter((x) => x.id !== id);
+    this.write(data);
+    return { offers: data.offers };
   }
 
   async powerPayments() {

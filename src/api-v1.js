@@ -5,7 +5,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import {
-  amsSlots, findSpoolByRef, grossOf, normalizeSpool, remainingShare, spoolPlace, spoolTypeOf, stockLevel, weightPatch,
+  amsSlots, findSpoolByRef, grossOf, normalizeSpool, remainingShare, shoppingList, spoolPlace, spoolTypeOf, stockLevel, weightPatch,
 } from '../public/js/domain.js';
 
 export function newApiKey() {
@@ -124,6 +124,7 @@ export function createPublicApi({ store, apiKey, isLoggedIn }) {
       '/api/v1/spulen/{nr}': 'Eine Rolle über ihre Nummer',
       'POST /api/v1/spulen/{nr}/gewicht': 'Gewicht ändern mit genau einem Feld: rest_g, mit_spule_g oder verbraucht_g',
       '/api/v1/ams': 'Welche Rolle in welchem AMS-Slot liegt',
+      '/api/v1/einkaufsliste': 'Knappe Sorten ohne Ersatz im Lager, mit zuletzt bezahltem Preis',
     },
   }));
 
@@ -168,6 +169,24 @@ export function createPublicApi({ store, apiKey, isLoggedIn }) {
     });
     const ohneSlot = store.spools.filter((s) => s.inAms && !s.bambu.slot).map((s) => spoolOut(s, store.settings));
     res.json({ slots, ohne_slot: ohneSlot });
+  });
+
+  router.get('/einkaufsliste', (req, res) => {
+    const list = shoppingList(store.spools, store.settings);
+    const out = (i) => ({
+      material: i.material,
+      hersteller: i.brand,
+      farbe: i.colorName,
+      farbcode: i.colorHex,
+      knapp: i.low.map((x) => ({ nr: x.nr, rest_g: x.netWeight })),
+      ersatz: i.spare.map((x) => ({ nr: x.nr, rest_g: x.netWeight })),
+      kaufgewicht_g: i.weight,
+      preis_pro_kg_eur: i.price ? i.price.perKg : null,
+      geschaetzt_eur: i.estimate,
+    });
+    res.json({
+      anzahl: list.buy.length, geschaetzt_eur: list.total, nachkaufen: list.buy.map(out), ersatz_im_lager: list.spare.map(out),
+    });
   });
 
   router.use((req, res) => res.status(404).json({ fehler: 'Unbekannte Adresse. Übersicht unter /api/v1' }));

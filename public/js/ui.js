@@ -18,6 +18,8 @@ export const icons = {
   link: svg('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>'),
   file: svg('<path d="M14 3H6v18h12V7l-4-4z"/><path d="M14 3v4h4"/>'),
   edit: svg('<path d="M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4"/>'),
+  qr: svg('<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2"/>'),
+  cart: svg('<path d="M3 4h2l2.4 11h10.2L20 7H6.2"/><circle cx="9" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/>'),
 };
 
 const nf = new Intl.NumberFormat('de-DE');
