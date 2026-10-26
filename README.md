@@ -140,10 +140,36 @@ Wichtig:
 - Plesk hält die App an, wenn sie eine Weile nicht benutzt wird. Beim nächsten Öffnen startet
   sie neu, verbindet sich mit dem Drucker und gleicht sofort mit Bambu ab.
 - **Update:** neue Dateien hochladen (den Ordner `data/` dabei nicht überschreiben),
-  „NPM install“ und „App neu starten“. Browser und Handys laden danach von selbst die neuen
-  Dateien: Die Seite fragt die App nach einer Versionskennung (`/version.json`) und lädt CSS und
-  Programm damit, statt alte Dateien aus dem Cache zu nehmen. Nur beim ersten Update auf diese
-  Version kann es nötig sein, die Seite einmal neu zu laden.
+  „NPM install“ und „App neu starten“, oder über Git (siehe unten). Browser und Handys laden
+  danach von selbst die neuen Dateien: Die Seite fragt die App nach einer Versionskennung
+  (`/version.json`) und lädt CSS und Programm damit, statt alte Dateien aus dem Cache zu nehmen.
+  Nur beim ersten Update auf diese Version kann es nötig sein, die Seite einmal neu zu laden.
+
+### Update über GitHub (Plesk Git)
+
+Statt ZIP-Dateien kann Plesk das Repository direkt von GitHub holen. Der Ordner `data/` mit dem
+Lager steht in `.gitignore` und wird dabei nie überschrieben.
+
+1. In Plesk bei der Domain **Git** öffnen und das Repository hinzufügen (bei einem privaten
+   Repository den SSH-Schlüssel, den Plesk anzeigt, auf GitHub unter Settings → Deploy keys
+   eintragen). Zweig: der, auf dem die Änderungen landen. Bereitstellungspfad: der
+   Anwendungsstamm, z. B. `/filament-lager`.
+2. **Automatisch bereitstellen** (optional): Bereitstellungsmodus „Automatisch“ wählen. Plesk
+   zeigt eine Webhook-Adresse; die auf GitHub unter Settings → Webhooks → Add webhook als
+   Payload URL eintragen (Content type `application/json`, nur „push“). Dann holt Plesk jede
+   Änderung sofort.
+3. **Neustart automatisch** (optional): unter „Zusätzliche Bereitstellungsaktionen aktivieren“
+   eintragen:
+
+   ```sh
+   mkdir -p tmp && touch tmp/restart.txt
+   ```
+
+   Das startet die App bei der nächsten Anfrage neu, wie der Knopf „App neu starten“.
+
+„NPM install“ ist nur nötig, wenn sich `package.json` geändert hat (neue Pakete); sonst reicht
+der Neustart. Ohne Webhook: in Plesk unter Git „Pull“ bzw. „Bereitstellen“, dann „App neu
+starten“.
 
 ## Bambu Filament Manager verbinden
 
