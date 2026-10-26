@@ -185,7 +185,11 @@ export function createPublicApi({ store, apiKey, isLoggedIn }) {
       geschaetzt_eur: i.estimate,
     });
     res.json({
-      anzahl: list.buy.length, geschaetzt_eur: list.total, nachkaufen: list.buy.map(out), ersatz_im_lager: list.spare.map(out),
+      anzahl: list.buy.length,
+      geschaetzt_eur: list.total,
+      nachkaufen: list.buy.map(out),
+      ersatz_im_lager: list.spare.map(out),
+      nicht_nachkaufen: list.skip.map(out), // z. B. 250-g-Rollen, siehe Preisliste
     });
   });
 

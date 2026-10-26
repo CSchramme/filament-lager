@@ -129,11 +129,16 @@ function addModelMeshes(st, xml) {
   }
 }
 
-// Bambu Studio schreibt beim Slicen Gramm und Druckzeit je Platte in slice_info.config.
+// Bambu Studio schreibt beim Slicen Gramm und Druckzeit je Platte in slice_info.config,
+// dazu jedes Objekt auf der Platte (<object name="Kürbis" skipped="false"/>).
+// Kopien heißen gleich oder bekommen eine Nummer angehängt ("Kürbis_2", "Kürbis (2)").
+const baseName = (n) => n.replace(/\.(stl|3mf|obj|step)$/i, '').replace(/(\s*\(\d+\)|[_ -]\d+)$/, '').trim().toLowerCase();
+
 export function parseSliceInfo(xml) {
   let grams = 0;
   let seconds = 0;
   let plates = 0;
+  const names = [];
   const plateRe = /<plate>([\s\S]*?)<\/plate>/g;
   let p;
   while ((p = plateRe.exec(xml))) {
@@ -145,9 +150,17 @@ export function parseSliceInfo(xml) {
       grams += g;
       seconds += Number(/key="prediction"\s+value="([\d.]+)"/.exec(body)?.[1] || 0);
       plates += 1;
+      for (const o of body.matchAll(/<object\b([^>]*)\/?>/g)) {
+        if (/\sskipped="true"/.test(o[1])) continue;
+        names.push(/\sname="([^"]*)"/.exec(o[1])?.[1] || '');
+      }
     }
   }
-  return plates ? { slicedGrams: Math.round(grams * 100) / 100, slicedSeconds: seconds, plates } : null;
+  if (!plates) return null;
+  const out = { slicedGrams: Math.round(grams * 100) / 100, slicedSeconds: seconds, plates };
+  // Mehrere gleiche Teile im Druck: Anzahl merken, damit der Rechner pro Teil rechnet
+  if (names.length > 1 && new Set(names.map(baseName)).size === 1) out.slicedParts = names.length;
+  return out;
 }
 
 export async function parse3mf(buffer) {

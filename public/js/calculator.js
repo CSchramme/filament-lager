@@ -2,7 +2,8 @@
 // übernehmen, Rolle wählen, Preis mit allen Posten ablesen und zum Beleg
 // hinzufügen. Die Datei bleibt im Browser.
 import {
-  densityOf, estimateGrams, matchSpool, parseDuration, priceQuote, pricePerGram, spoolLabel, weightPatch,
+  DEFAULT_PRINT_RATE, densityOf, estimateGrams, estimateSeconds, matchSpool, parseDuration, priceQuote, pricePerGram, printRate, priceSource,
+  spoolLabel, weightPatch,
 } from './domain.js';
 import { parseModelFile } from './model.js';
 import { addPosition, draftTotals, loadDraft } from './sales.js';
@@ -13,18 +14,20 @@ import {
 
 const PREFS_KEY = 'filament-lager-rechner';
 const calc = {
-  model: null, job: null, spoolId: '', qty: 1, grams: '', time: '', infill: 15, wall: 0.85, material: '',
+  model: null, job: null, spoolId: '', qty: 1, grams: '', time: '', wall: 0.85, material: '',
+  infill: null, // null = Standard-Infill aus den Einstellungen
+  perPrint: 1, // gleiche Teile in einem Druck (z. B. 5 auf einer Platte)
   // Abweichend von den Einstellungen nur für diese Rechnung; null = Einstellung
   labor: null, profit: null,
 };
 try {
   const saved = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
-  for (const k of ['spoolId', 'infill', 'wall', 'material']) if (saved[k] !== undefined) calc[k] = saved[k];
+  for (const k of ['spoolId', 'wall', 'material']) if (saved[k] !== undefined) calc[k] = saved[k];
 } catch { /* ohne gespeicherte Werte */ }
 
 function savePrefs() {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ spoolId: calc.spoolId, infill: calc.infill, wall: calc.wall, material: calc.material }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ spoolId: calc.spoolId, wall: calc.wall, material: calc.material }));
   } catch { /* egal */ }
 }
 
@@ -33,13 +36,15 @@ const pct = (v) => fmtNum(v, Number.isInteger(v) ? 0 : 1);
 const hm = (seconds) => `${Math.floor(seconds / 3600)}:${String(Math.round((seconds % 3600) / 60)).padStart(2, '0')}`;
 
 let ctx = null; // { root, app, spoolUpdated, go }
+let rate = { ...DEFAULT_PRINT_RATE }; // Druckzeit pro Gramm, aus dem Druckverlauf gelernt
+let rateLoaded = false;
 
 // Einen Druck aus dem Verlauf in den Rechner übernehmen (vor dem Wechsel zum Reiter).
 export function openJob(job, spools) {
   const main = [...(job.filaments || [])].sort((a, b) => b.grams - a.grams)[0];
   const spool = main && main.color ? matchSpool(spools, main) : null;
   Object.assign(calc, {
-    job, model: null, grams: '', qty: 1, time: job.seconds ? hm(job.seconds) : '', spoolId: spool ? spool.id : calc.spoolId, material: '',
+    job, model: null, grams: '', qty: 1, perPrint: 1, time: job.seconds ? hm(job.seconds) : '', spoolId: spool ? spool.id : calc.spoolId, material: '',
   });
 }
 
@@ -60,12 +65,13 @@ export function renderCalculator(root, app, { spoolUpdated, go }) {
           <div id="calc-model"></div>
           <div class="fields">
             <label class="field"><span>Anzahl</span><input id="calc-qty" type="number" inputmode="numeric" min="1" step="1" value="${calc.qty}"></label>
-            <label class="field"><span>Druckzeit pro Stück (Std:Min)</span><input id="calc-time" inputmode="numeric" placeholder="z. B. 1:30" value="${esc(calc.time)}"></label>
-            <label class="field full"><span>Gramm von Hand (optional)</span><input id="calc-grams" inputmode="decimal" placeholder="aus Bambu Studio" value="${esc(calc.grams)}"></label>
+            <label class="field"><span>Gleiche Teile pro Druck</span><input id="calc-per" type="number" inputmode="numeric" min="1" step="1" value="${calc.perPrint}"><small class="muted">z. B. 5 auf einer Platte</small></label>
+            <label class="field"><span data-label="time"></span><input id="calc-time" inputmode="numeric" placeholder="z. B. 1:30" value="${esc(calc.time)}"><small class="muted" data-time-hint></small></label>
+            <label class="field"><span>Infill (%)</span><input id="calc-infill" inputmode="decimal" value="${esc(String(infill()).replace('.', ','))}"><small class="muted" data-infill-hint></small></label>
+            <label class="field full"><span data-label="grams"></span><input id="calc-grams" inputmode="decimal" placeholder="aus Bambu Studio" value="${esc(calc.grams)}"></label>
           </div>
-          <details><summary>Annahmen für die Schätzung</summary>
+          <details><summary>Weitere Annahmen für die Schätzung</summary>
             <div class="fields">
-              <label class="field"><span>Infill (%)</span><input id="calc-infill" inputmode="decimal" value="${esc(String(calc.infill))}"></label>
               <label class="field"><span>Wände, Boden, Deckel (mm)</span><input id="calc-wall" inputmode="decimal" value="${esc(String(calc.wall).replace('.', ','))}"></label>
             </div>
             <p class="small muted">Ohne Slicer schätzt der Rechner: die Außenhaut voll, das Innere mit Infill. Stützstrukturen und Abfall beim Farbwechsel sind nicht dabei. Genauer wird es mit den Gramm aus Bambu Studio oder einer dort geslicten 3MF.</p>
@@ -81,9 +87,21 @@ export function renderCalculator(root, app, { spoolUpdated, go }) {
     </section>
     <button type="button" class="calc-bar" id="calc-bar" hidden></button>`;
   bind();
+  updateLabels();
   updateModel();
   updateSpools();
   updateResult();
+  // Druckzeit-Schätzung aus den eigenen Drucken lernen (einmal pro Seitenaufruf)
+  if (!rateLoaded) {
+    rateLoaded = true;
+    app.backend.tasks().then((h) => {
+      rate = printRate(h.tasks || []);
+      if (ctx.root.querySelector('#calc-result')) {
+        updateModel();
+        updateResult();
+      }
+    }).catch(() => { /* Richtwerte bleiben */ });
+  }
 }
 
 function bind() {
@@ -107,9 +125,26 @@ function bind() {
     updateResult();
   });
   field('#calc-qty', 'qty', (v) => Math.max(1, Math.round(num(v)) || 1));
+  root.querySelector('#calc-per').addEventListener('input', (e) => {
+    setPerPrint(Math.max(1, Math.round(num(e.target.value)) || 1), false);
+    updateModel();
+    updateResult();
+  });
   field('#calc-grams', 'grams');
   field('#calc-time', 'time');
-  field('#calc-infill', 'infill');
+  root.querySelector('#calc-infill').addEventListener('input', (e) => {
+    const v = num(e.target.value);
+    calc.infill = e.target.value.trim() === '' || !Number.isFinite(v) ? null : Math.min(100, Math.max(0, v));
+    updateModel();
+    updateResult();
+  });
+  root.querySelector('[data-infill-hint]').addEventListener('click', (e) => {
+    if (!e.target.closest('[data-calc="infill-reset"]')) return;
+    calc.infill = null;
+    root.querySelector('#calc-infill').value = String(infill()).replace('.', ',');
+    updateModel();
+    updateResult();
+  });
   field('#calc-wall', 'wall');
   root.querySelector('#calc-material').addEventListener('change', (e) => {
     calc.material = e.target.value;
@@ -167,6 +202,8 @@ async function loadFile(file) {
       calc.time = hm(calc.model.slicedSeconds);
       ctx.root.querySelector('#calc-time').value = calc.time;
     }
+    // Gleiche Teile im gesliceten Druck erkannt (z. B. 5 Kürbisse), sonst eins
+    setPerPrint(calc.model.slicedParts || 1);
   } catch (err) {
     calc.model = null;
     box.innerHTML = `<div class="note crit">${esc(err.message)}</div>`;
@@ -179,23 +216,61 @@ async function loadFile(file) {
 
 const selectedSpool = () => ctx.app.spools.find((s) => s.id === calc.spoolId) || null;
 
-// Gramm pro Stück und woher sie kommen.
+// Infill für die Schätzung: von Hand geändert oder der Standard aus den Einstellungen.
+const infill = () => calc.infill ?? ctx.app.settings.defaultInfill;
+
+// Gleiche Teile pro Druck: Gramm und Zeit gelten dann für den ganzen Druck.
+// Mindestens so viele Teile wie im Druck sind, kommen in die Anzahl.
+function setPerPrint(n, updateInput = true) {
+  calc.perPrint = n;
+  if (calc.qty < n) {
+    calc.qty = n;
+    ctx.root.querySelector('#calc-qty').value = n;
+  }
+  if (updateInput) ctx.root.querySelector('#calc-per').value = n;
+  updateLabels();
+}
+
+function updateLabels() {
+  const n = calc.perPrint;
+  const { root } = ctx;
+  root.querySelector('[data-label="time"]').textContent = n > 1 ? `Druckzeit für alle ${n} Teile (Std:Min)` : 'Druckzeit pro Stück (Std:Min)';
+  root.querySelector('[data-label="grams"]').textContent = n > 1 ? `Gramm für alle ${n} Teile (optional)` : 'Gramm pro Stück von Hand (optional)';
+}
+
+// Gramm pro Stück und woher sie kommen. Werte für den ganzen Druck (von Hand,
+// Druckverlauf, geslicte 3MF) werden durch die Teile pro Druck geteilt.
 function gramsPerPiece() {
+  const per = calc.perPrint;
+  const split = (grams, source) => ({ grams: grams / per, source: per > 1 ? `${source}, ${fmtNum(grams)} g für ${per} Teile` : source, total: grams });
   const handGrams = num(calc.grams);
-  if (calc.grams !== '' && Number.isFinite(handGrams) && handGrams > 0) return { grams: handGrams, source: 'von Hand' };
-  if (calc.job) return { grams: calc.job.grams, source: 'aus dem Druckverlauf' };
+  if (calc.grams !== '' && Number.isFinite(handGrams) && handGrams > 0) return split(handGrams, 'von Hand');
+  if (calc.job) return split(calc.job.grams, 'aus dem Druckverlauf');
   const m = calc.model;
   if (!m) return null;
-  if (m.slicedGrams) return { grams: m.slicedGrams, source: 'laut Bambu Studio' };
+  if (m.slicedGrams) return split(m.slicedGrams, 'laut Bambu Studio');
   const spool = selectedSpool();
   const density = densityOf(spool ? spool.material : 'PLA');
-  const grams = estimateGrams(m, { infillPct: calc.infill, wallMm: calc.wall, density });
-  return { grams, source: `geschätzt, ${pct(calc.infill)} % Infill`, density };
+  const grams = estimateGrams(m, { infillPct: infill(), wallMm: calc.wall, density });
+  return { grams, source: `geschätzt, ${pct(infill())} % Infill`, density, estimated: true };
 }
 
 function updateModel() {
   const box = ctx.root.querySelector('#calc-model');
   const g = gramsPerPiece();
+  // Hinweis am Infill: Standard, zurücksetzen, oder gerade nicht gebraucht
+  const std = ctx.app.settings.defaultInfill;
+  ctx.root.querySelector('[data-infill-hint]').innerHTML = g && !g.estimated
+    ? 'nur für die Schätzung aus einer STL'
+    : calc.infill !== null && calc.infill !== std
+      ? `Standard ${pct(std)} % <button type="button" class="link" data-calc="infill-reset">zurücksetzen</button>`
+      : 'Standard, unter Einstellungen änderbar';
+  // Ohne Druckzeit: Schätzung aus dem Gewicht anzeigen
+  const time = printTime();
+  const timeInput = ctx.root.querySelector('#calc-time');
+  timeInput.placeholder = time.estimated ? `ca. ${hm(time.total)}` : 'z. B. 1:30';
+  ctx.root.querySelector('[data-time-hint]').textContent = time.estimated
+    ? `leer: ca. ${fmtDuration(time.total)} geschätzt, ${rateText()}` : '';
   if (calc.job) {
     const j = calc.job;
     const multi = (j.filaments || []).length > 1;
@@ -203,8 +278,8 @@ function updateModel() {
       <div class="model-name"><strong>${esc(j.title)}</strong><span class="pill">aus dem Druckverlauf</span>
         <button type="button" class="btn small ghost" data-calc="clear-job">Entfernen</button></div>
       <dl class="model-facts">
-        <div><dt>Filament pro Stück</dt><dd class="num">${fmtNum(j.grams)} g</dd></div>
-        ${j.seconds ? `<div><dt>Druckzeit</dt><dd class="num">${fmtDuration(j.seconds)}</dd></div>` : ''}
+        <div><dt>Filament pro Stück</dt><dd class="num">${fmtNum(j.grams / calc.perPrint)} g${calc.perPrint > 1 ? ` <small class="muted">${fmtNum(j.grams)} g für ${calc.perPrint} Teile</small>` : ''}</dd></div>
+        ${j.seconds ? `<div><dt>Druckzeit</dt><dd class="num">${fmtDuration(j.seconds)}${calc.perPrint > 1 ? ` <small class="muted">${fmtDuration(j.seconds / calc.perPrint)} pro Teil</small>` : ''}</dd></div>` : ''}
         ${multi ? `<div><dt>Farben</dt><dd>${j.filaments.map((f) => `<span class="dot-color" style="background:${esc(f.color)}" title="${esc(f.type)} ${fmtNum(f.grams)} g"></span>`).join('')}</dd></div>` : ''}
       </dl>
       ${multi ? '<p class="small muted">Mehrfarbig: Der Rechner nimmt den Preis der gewählten Rolle für alle Gramm. Die Liste unter „Drucke“ rechnet jede Farbe einzeln.</p>' : ''}
@@ -222,9 +297,11 @@ function updateModel() {
     <dl class="model-facts">
       ${m.triangles ? `<div><dt>Maße</dt><dd class="num">${m.sizeMm.map((v) => fmtNum(v)).join(' × ')} mm</dd></div>
       <div><dt>Volumen</dt><dd class="num">${fmtNum(m.volumeMm3 / 1000)} cm³</dd></div>` : ''}
-      ${m.slicedSeconds ? `<div><dt>Druckzeit</dt><dd class="num">${fmtDuration(m.slicedSeconds)}${m.plates > 1 ? ` (${m.plates} Platten)` : ''}</dd></div>` : ''}
+      ${m.slicedSeconds ? `<div><dt>Druckzeit</dt><dd class="num">${fmtDuration(m.slicedSeconds)}${m.plates > 1 ? ` (${m.plates} Platten)` : ''}${calc.perPrint > 1 ? ` <small class="muted">${fmtDuration(m.slicedSeconds / calc.perPrint)} pro Teil</small>` : ''}</dd></div>` : ''}
       ${g ? `<div><dt>Filament pro Stück</dt><dd class="num">${fmtNum(g.grams)} g <small class="muted">${esc(g.source)}</small></dd></div>` : ''}
+      ${time.estimated ? `<div><dt>Druckzeit geschätzt</dt><dd class="num">ca. ${fmtDuration(time.total)}${calc.perPrint > 1 ? ` <small class="muted">für ${calc.perPrint} Teile</small>` : ''}</dd></div>` : ''}
     </dl>
+    ${m.slicedParts > 1 ? `<p class="small muted">${m.slicedParts} gleiche Teile im Druck erkannt, Gramm und Zeit sind auf die Teile verteilt.</p>` : ''}
     ${open ? '<div class="note warn">Das Modell scheint nicht geschlossen zu sein, das Volumen ist unsicher. Gramm am besten von Hand eintragen.</div>' : ''}
   </div>`;
 }
@@ -240,15 +317,27 @@ function updateSpools() {
     .sort((a, b) => (a.colorName || '').localeCompare(b.colorName || '', 'de') || a.netWeight - b.netWeight);
   root.querySelector('#calc-spools').innerHTML = list.map((s) => `<button type="button" class="spool-chip" data-pick="${esc(s.id)}" aria-pressed="${s.id === calc.spoolId}">
       ${ring(s.colorHex, s.purchaseWeight ? s.netWeight / s.purchaseWeight : 0)}<span class="txt"><span class="name"><span class="nr">#${s.nr ?? '–'}</span>${esc(s.colorName || s.colorHex)}</span>
-      <span class="meta">${esc(s.material)} · ${fmt(s.netWeight)} g${s.price === null ? ' · ohne Kaufpreis' : ''}</span></span></button>`).join('') || '<p class="small muted">Keine Rollen im Lager.</p>';
+      <span class="meta">${esc(s.material)} · ${fmt(s.netWeight)} g${priceSource(s, app.settings).kind === 'standard' ? ' · ohne Preis' : ''}</span></span></button>`).join('') || '<p class="small muted">Keine Rollen im Lager.</p>';
 }
 
-function printSeconds() {
+// Druckzeit: eingegeben, aus dem Druckverlauf, aus Bambu Studio oder sonst aus
+// dem Gewicht geschätzt. Sie gilt für den ganzen Druck mit allen Teilen.
+function printTime() {
   const typed = parseDuration(calc.time);
-  if (typed !== null) return typed;
-  if (calc.job && calc.job.seconds) return calc.job.seconds;
-  if (calc.model && calc.model.slicedSeconds) return calc.model.slicedSeconds;
-  return 0;
+  let total = 0;
+  if (typed !== null) total = typed;
+  else if (calc.job && calc.job.seconds) total = calc.job.seconds;
+  else if (calc.model && calc.model.slicedSeconds) total = calc.model.slicedSeconds;
+  if (total) return { total, perPiece: total / calc.perPrint, estimated: false };
+  const g = gramsPerPiece();
+  if (!g) return { total: 0, perPiece: 0, estimated: false };
+  const est = estimateSeconds(g.grams * calc.perPrint, rate);
+  return { total: est, perPiece: est / calc.perPrint, estimated: true };
+}
+
+function rateText() {
+  const how = `${fmtNum(rate.setup / 60, 0)} Min. Vorlauf + ${fmtNum(rate.perGram / 60, 1)} Min. pro g`;
+  return rate.prints ? `gelernt aus ${rate.prints} deiner Drucke: ${how}` : `Richtwert für Bambu, 0,2-mm-Profil: ${how}`;
 }
 
 // Abweichungen von den Einstellungen, die mit in den Beleg gehen.
@@ -266,12 +355,12 @@ function quote(qty = calc.qty) {
   const spool = selectedSpool();
   const rates = { ...ctx.app.settings, ...overrides() };
   const perGram = pricePerGram(spool, rates);
-  const seconds = printSeconds();
+  const time = printTime();
   return {
     ...priceQuote({
-      grams: g.grams, perGram, seconds, qty,
+      grams: g.grams, perGram, seconds: time.perPiece, qty,
     }, rates),
-    perGram, spool, source: g.source, rates,
+    perGram, spool, source: g.source, rates, timeEstimated: time.estimated,
   };
 }
 
@@ -292,9 +381,15 @@ function updateResult(full = true) {
   }
   const { rates } = q;
   const s = q.spool;
-  const missingPrice = s && s.price === null;
-  const priceNote = s && s.price !== null ? `Kaufpreis ${fmtEur(s.price)} für ${fmt(s.purchaseWeight)} g` : `Standardpreis ${fmtEur(rates.pricePerKg)} pro kg`;
-  const h = fmtNum(q.hours, 2);
+  // Preis der Rolle: eigener Kaufpreis, Preisliste oder Standardpreis
+  const src = priceSource(s, rates);
+  const missingPrice = s && src.kind === 'standard';
+  const priceNote = {
+    rolle: () => `Kaufpreis ${fmtEur(s.price)} für ${fmt(s.purchaseWeight)} g`,
+    liste: () => `Preisliste ${fmtEur(src.entry.price)} pro ${fmt(src.entry.weight)} g`,
+    standard: () => `Standardpreis ${fmtEur(rates.pricePerKg)} pro kg`,
+  }[src.kind]();
+  const h = `${q.timeEstimated ? 'ca. ' : ''}${fmtNum(q.hours, 2)}`;
   const noTime = '<small class="muted">Druckzeit fehlt</small>';
   const line = (k, label, value, cls = '') => `<div class="calc-line ${cls}"><span>${label}</span><span class="num" data-k="${k}">${fmtEur(value)}</span></div>`;
   const rows = [
@@ -317,10 +412,10 @@ function updateResult(full = true) {
   }
   const draft = loadDraft();
   const open = draft.positions.length ? draftTotals(draft, ctx.app.settings) : null;
-  const html = `<div class="panel-head"><h2>3. Preis</h2><p>${esc(q.source)}</p></div>
+  const html = `<div class="panel-head"><h2>3. Preis</h2><p>${esc(q.source)}${q.timeEstimated ? ', Druckzeit geschätzt' : ''}</p></div>
     ${s ? `<div class="spool">${ring(s.colorHex, s.purchaseWeight ? s.netWeight / s.purchaseWeight : 0)}<div class="txt"><div class="title">${esc(spoolLabel(s))}</div><div class="sub">${esc(priceNote)}</div></div></div>`
     : `<p class="small muted">Noch keine Rolle gewählt, gerechnet wird mit dem ${esc(priceNote)}.</p>`}
-    ${missingPrice ? `<div class="note warn price-ask"><span>Für Rolle #${s.nr} fehlt der Kaufpreis, gerechnet wird mit ${fmtEur(rates.pricePerKg)} pro kg. Was hast du für die Rolle bezahlt?</span>
+    ${missingPrice ? `<div class="note warn price-ask"><span>Für Rolle #${s.nr} (${esc(s.material)}) gibt es keinen Preis, gerechnet wird mit ${fmtEur(rates.pricePerKg)} pro kg. Was hast du für die Rolle bezahlt? Für alle ${esc(s.material)}-Rollen geht es im Reiter „Preisliste“.</span>
       <span class="copy-row"><input id="calc-spool-price" inputmode="decimal" placeholder="Kaufpreis in €" aria-label="Kaufpreis der Rolle in Euro"><button class="btn small" type="button" data-calc="save-price">Speichern</button></span></div>` : ''}
     <div class="calc-lines">${rows}</div>
     <div class="calc-total"><span>Preis pro Stück</span><strong class="num" data-k="piece">${fmtEur(q.piece)}</strong></div>
@@ -345,7 +440,7 @@ function offerText() {
     calc.job ? `Modell: ${calc.job.title}` : calc.model ? `Modell: ${calc.model.name}` : '',
     s ? `Farbe: ${s.colorName || s.colorHex} (${s.material})` : '',
     `Filament: ${fmtNum(q.grams)} g pro Stück`,
-    q.seconds ? `Druckzeit: ${fmtDuration(q.seconds)} pro Stück` : '',
+    q.seconds ? `Druckzeit: ${q.timeEstimated ? 'ca. ' : ''}${fmtDuration(q.seconds)} pro Stück` : '',
     `Preis pro Stück: ${fmtEur(q.piece)}`,
     q.qty > 1 ? `${q.qty} Stück: ${fmtEur(q.sum)}` : '',
     q.minExtra > 0 ? `Mindestpreis pro Auftrag: ${fmtEur(q.total)}` : '',

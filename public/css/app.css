@@ -637,12 +637,34 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
 .toast { background: var(--ink); color: var(--surface); padding: 10px 14px; border-radius: var(--radius-sm); box-shadow: var(--shadow); font-weight: 700; font-size: var(--step--1); }
 .toast.error { background: var(--crit); color: #fff; }
 
+/* Menü: bis 980 px Breite stehen die Bereiche hinter einem Menü-Knopf */
+.menu-btn { display: none; }
+@media (max-width: 980px) {
+  .topbar .wrap { gap: 10px; padding-block: 8px; flex-wrap: nowrap; }
+  .menu-btn {
+    display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px;
+    border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink);
+    font-weight: 700; cursor: pointer; white-space: nowrap;
+  }
+  .menu-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+  .menu-btn[aria-expanded="true"] { background: var(--accent-soft); border-color: var(--accent); }
+  .mode { margin-left: auto; order: 2; }
+  .menu-btn { order: 3; }
+  .tabs {
+    display: none; position: absolute; left: 0; right: 0; top: 100%; flex-direction: column; gap: 2px; margin: 0;
+    padding: 8px max(16px, env(safe-area-inset-left)) 16px; background: var(--surface); border-bottom: 1px solid var(--line);
+    box-shadow: var(--shadow); max-height: calc(100vh - 80px); overflow-y: auto;
+  }
+  .tabs.open { display: flex; }
+  .tab { text-align: left; padding: 12px 14px; font-size: var(--step-0); }
+  .tab[aria-current="page"] { box-shadow: inset 3px 0 0 var(--accent); }
+}
 @media (max-width: 640px) {
-  .topbar .wrap { gap: 8px; padding-block: 8px; }
-  .tabs { margin-left: 0; width: 100%; order: 3; overflow-x: auto; scrollbar-width: none; }
-  .tab { flex: 1 0 auto; padding: 8px 10px; font-size: var(--step--1); }
-  .mode { margin-left: auto; }
   .stat .value { font-size: var(--step-2); }
+}
+@media (max-width: 420px) {
+  .mode { font-size: 0; gap: 0; } /* nur der Punkt, Text im Tooltip */
+  .brand { font-size: var(--step-0); }
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -734,4 +756,37 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
   .stock-count { justify-items: start; justify-content: start; text-align: left; grid-template-columns: auto auto; gap: 6px; align-items: baseline; }
   .stock-price { text-align: left; }
   .stock-actions { grid-column: 1 / -1; }
+}
+
+/* Auswahl mit Suche */
+.combo { position: relative; }
+.combo input { width: 100%; }
+.combo-list { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); max-height: 260px; overflow-y: auto; margin: 0; padding: 4px; list-style: none; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+.combo-list li { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; padding: 8px 10px; border-radius: 4px; cursor: pointer; font-size: var(--step-0); }
+.combo-list li small { color: var(--ink-3); white-space: nowrap; }
+.combo-list li[aria-selected="true"] { background: var(--accent-soft); }
+.combo-list li:hover { background: var(--surface-2); }
+.combo-list .combo-empty { color: var(--ink-3); cursor: default; }
+
+/* Preisliste */
+.price-view { display: grid; gap: 20px; }
+.price-view h3 { margin: 16px 0 4px; }
+.price-list { display: grid; }
+.price-row { display: grid; grid-template-columns: minmax(0, 1fr) 8em 6.5em 6.5em 14em; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.price-name { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.price-field { display: grid; gap: 2px; }
+.price-field span { font-size: 11px; font-weight: 700; color: var(--ink-2); }
+.price-field input { min-height: 34px; padding: 4px 8px; text-align: right; }
+.price-row:not(.has-price) .price-name strong { font-weight: 400; }
+.price-kg { text-align: right; }
+.price-kg small { color: var(--ink-3); }
+.price-actions { display: inline-flex; gap: 6px; justify-content: flex-end; align-items: center; }
+.default-price { margin-top: 16px; flex-wrap: wrap; }
+.default-price input { width: 6em; text-align: right; }
+@media (max-width: 640px) {
+  .price-row { grid-template-columns: 1fr 1fr auto; }
+  .price-name { grid-column: 1 / -1; }
+  .price-kg { align-self: end; padding-bottom: 8px; }
+  .price-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .price-actions:empty { display: none; }
 }

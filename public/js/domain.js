@@ -81,6 +81,10 @@ export function defaultSettings() {
     sellerAddress: '',
     smallBusiness: false, // Hinweis § 19 UStG auf dem Beleg
     offerDays: 14, // so lange gilt ein Angebot
+    defaultInfill: 15, // Infill in % für die Schätzung aus STL-Dateien
+    // Einkaufspreis je Filamentart, pro Rolle mit diesem Gewicht
+    priceList: [{ material: 'PLA Basic', price: 19.99, weight: 1000 }],
+    noRebuyWeights: [250], // Rollen mit diesem Kaufgewicht nicht nachkaufen
     places: [],
   };
 }
@@ -226,6 +230,10 @@ export function normalizeSettings(input) {
     sellerAddress: String(src.sellerAddress ?? '').trim(),
     smallBusiness: toBool(src.smallBusiness, base.smallBusiness),
     offerDays: Math.min(365, Math.max(1, toInt(src.offerDays, base.offerDays))),
+    defaultInfill: Math.min(100, Math.max(0, toMoney(src.defaultInfill) ?? base.defaultInfill)),
+    priceList: normalizePriceList(Array.isArray(src.priceList) ? src.priceList : base.priceList),
+    noRebuyWeights: [...new Set((Array.isArray(src.noRebuyWeights) ? src.noRebuyWeights : base.noRebuyWeights)
+      .map((w) => toInt(w, 0)).filter((w) => w > 0))].sort((a, b) => a - b),
     places,
   };
 }
@@ -279,10 +287,117 @@ export function estimateGrams({ volumeMm3, areaMm2 }, { infillPct = 15, wallMm =
   return ((shell + inner) / 1000) * density;
 }
 
-// Preis pro Gramm: eigener Rollenpreis, sonst der Standardpreis pro kg.
+// Druckzeit aus dem Gewicht schätzen, wenn kein Slicer-Ergebnis da ist:
+// Zeit = Vorlauf (Aufheizen, Kalibrieren) + Sekunden pro Gramm. Gelernt aus den
+// fertigen Drucken im Bambu-Verlauf, sonst Richtwerte für einen Bambu-Drucker
+// mit 0,2-mm-Standardprofil (5 Min. Vorlauf, 2,4 Min. pro Gramm).
+export const DEFAULT_PRINT_RATE = { setup: 300, perGram: 144, prints: 0 };
+
+export function printRate(tasks) {
+  let pts = (tasks || []).filter((t) => t.status === 2 && t.grams >= 1 && t.seconds >= 120).map((t) => [t.grams, t.seconds]);
+  if (pts.length >= 5) {
+    // Ausreißer weg (z. B. über Nacht pausiert): weit weg vom mittleren Sekunden-pro-Gramm
+    const ratios = pts.map(([g, sec]) => sec / g).sort((a, b) => a - b);
+    const median = ratios[Math.floor(ratios.length / 2)];
+    pts = pts.filter(([g, sec]) => sec / g < median * 4 && sec / g > median / 4);
+  }
+  if (pts.length < 3) return { ...DEFAULT_PRINT_RATE };
+  const n = pts.length;
+  const mx = pts.reduce((a, [g]) => a + g, 0) / n;
+  const my = pts.reduce((a, [, sec]) => a + sec, 0) / n;
+  const vx = pts.reduce((a, [g]) => a + (g - mx) ** 2, 0);
+  let perGram = vx > 1e-9 ? pts.reduce((a, [g, sec]) => a + (g - mx) * (sec - my), 0) / vx : my / mx;
+  let setup = my - perGram * mx;
+  // Unplausible Werte begrenzen, dann die Steigung neu durch den Mittelpunkt legen
+  if (setup < 0 || setup > 1800 || perGram <= 0) {
+    setup = Math.min(1800, Math.max(0, setup));
+    perGram = (my - setup) / mx;
+  }
+  perGram = Math.min(900, Math.max(20, perGram));
+  return { setup: Math.round(setup), perGram, prints: n };
+}
+
+export function estimateSeconds(grams, rate = DEFAULT_PRINT_RATE) {
+  return grams > 0 ? Math.round(rate.setup + grams * rate.perGram) : 0;
+}
+
+// Preisliste: eine Zeile je Filamentart (gleicher Name ohne Groß/klein zählt einmal).
+export function normalizePriceList(list) {
+  const seen = new Set();
+  return (Array.isArray(list) ? list : []).map((e) => ({
+    material: str(e && e.material),
+    price: toMoney(e && e.price),
+    weight: Math.max(1, toInt(e && e.weight, 1000)),
+  })).filter((e) => e.material && e.price !== null && e.price >= 0 && !seen.has(e.material.toLowerCase()) && seen.add(e.material.toLowerCase()));
+}
+
+export function listPrice(material, settings) {
+  const m = str(material).toLowerCase();
+  return (settings.priceList || []).find((e) => e.material.toLowerCase() === m) || null;
+}
+
+// Listenpreis für eine Rolle mit diesem Kaufgewicht, anteilig (250 g = 1/4 der 1-kg-Rolle).
+export function listPriceForWeight(entry, purchaseWeight) {
+  return cents((entry.price * purchaseWeight) / entry.weight);
+}
+
+// Woher der Preis einer Rolle kommt: eigener Kaufpreis, Preisliste oder Standardpreis.
+export function priceSource(spool, settings) {
+  if (spool && spool.price !== null && spool.price !== undefined && spool.purchaseWeight > 0) {
+    return { kind: 'rolle', perGram: spool.price / spool.purchaseWeight };
+  }
+  const entry = spool ? listPrice(spool.material, settings) : null;
+  if (entry) return { kind: 'liste', perGram: entry.price / entry.weight, entry };
+  return { kind: 'standard', perGram: settings.pricePerKg / 1000 };
+}
+
+// Preis pro Gramm: eigener Rollenpreis, sonst die Preisliste, sonst der Standardpreis pro kg.
 export function pricePerGram(spool, settings) {
-  if (spool && spool.price !== null && spool.price !== undefined && spool.purchaseWeight > 0) return spool.price / spool.purchaseWeight;
-  return settings.pricePerKg / 1000;
+  return priceSource(spool, settings).perGram;
+}
+
+// Alle Filamentarten: aus der Preisliste, die bekannten Bambu-Sorten und alles,
+// was im Lager vorkommt. Arten mit Rollen im Lager zuerst.
+export function filamentTypes(spools, settings) {
+  const byKey = new Map();
+  const add = (material) => {
+    const m = str(material);
+    if (m && !byKey.has(m.toLowerCase())) byKey.set(m.toLowerCase(), { material: m, count: 0, entry: listPrice(m, settings) });
+  };
+  for (const s of spools) add(s.material);
+  for (const e of settings.priceList || []) add(e.material);
+  for (const m of MATERIALS) add(m);
+  for (const s of spools) byKey.get(s.material.toLowerCase()).count += 1;
+  return [...byKey.values()].sort((a, b) => Number(b.count > 0) - Number(a.count > 0) || a.material.localeCompare(b.material, 'de'));
+}
+
+// Änderungen aus priceListChanges übernehmen; gibt die Zahl der geänderten Rollen zurück.
+export function applyPriceChanges(spools, changes) {
+  for (const { id, patch } of changes) {
+    const idx = spools.findIndex((s) => s.id === id);
+    if (idx >= 0) spools[idx] = normalizeSpool(patch, { base: spools[idx] });
+  }
+  return changes.length;
+}
+
+// Daten von vor der Preisliste: Rollen ohne Preis bekommen einmalig den Listenpreis.
+export function migratePriceList(rawSettings, data) {
+  if (!rawSettings || typeof rawSettings !== 'object' || 'priceList' in rawSettings) return 0;
+  return applyPriceChanges(data.spools, priceListChanges(data.spools, data.settings));
+}
+
+// Preis aus der Preisliste bei Rollen eintragen: ohne Preis immer, mit anderem
+// Preis nur mit overwrite. Ergebnis: Änderungen für normalizeSpool.
+export function priceListChanges(spools, settings, { material = null, overwrite = false } = {}) {
+  const changes = [];
+  for (const s of spools) {
+    if (material && s.material.toLowerCase() !== str(material).toLowerCase()) continue;
+    const entry = listPrice(s.material, settings);
+    if (!entry || !s.purchaseWeight) continue;
+    const price = listPriceForWeight(entry, s.purchaseWeight);
+    if (s.price === null ? true : overwrite && s.price !== price) changes.push({ id: s.id, patch: { price } });
+  }
+  return changes;
 }
 
 // Passende Lagerrolle für ein Filament aus dem Druckverlauf: gleicher Typ,
@@ -942,14 +1057,22 @@ export function shoppingList(spools, settings) {
     groups.get(k).push(s);
   }
   const items = [];
+  const noRebuy = settings.noRebuyWeights || [];
   for (const list of groups.values()) {
     const low = list.filter((s) => ['knapp', 'leer'].includes(stockLevel(s, settings)));
     if (!low.length) continue;
     const spare = list.filter((s) => !low.includes(s)).sort((a, b) => b.netWeight - a.netWeight);
     const first = low[0];
-    const ownPrice = lastPaid(list);
-    const price = ownPrice || lastPaid(spools.filter((s) => s.material === first.material && s.brand === first.brand));
-    const weight = price ? price.weight : first.purchaseWeight;
+    // Preis: Preisliste, sonst zuletzt bezahlt für die Sorte, sonst für das Material der Marke
+    const entry = listPrice(first.material, settings);
+    const ownPrice = entry ? null : lastPaid(list);
+    const paid = ownPrice || (entry ? null : lastPaid(spools.filter((s) => s.material === first.material && s.brand === first.brand)));
+    const price = entry ? {
+      nr: null, price: entry.price, weight: entry.weight, perKg: cents((entry.price / entry.weight) * 1000),
+    } : paid;
+    // Kaufgewicht der nächsten Rolle; Gewichte, die nicht nachgekauft werden, nie vorschlagen
+    const weight = [price && price.weight, ...list.map((s) => s.purchaseWeight), 1000].find((w) => w && !noRebuy.includes(w));
+    const skip = !spare.length && low.every((s) => noRebuy.includes(s.purchaseWeight));
     items.push({
       key: sortKey(first),
       material: first.material,
@@ -959,20 +1082,22 @@ export function shoppingList(spools, settings) {
       low: low.map((s) => ({ id: s.id, nr: s.nr, netWeight: s.netWeight, level: stockLevel(s, settings) })),
       spare: spare.map((s) => ({ id: s.id, nr: s.nr, netWeight: s.netWeight, level: stockLevel(s, settings) })),
       rest: list.reduce((a, s) => a + s.netWeight, 0),
-      buy: !spare.length, // nachkaufen, kein Ersatz im Lager
+      buy: !spare.length && !skip, // nachkaufen, kein Ersatz im Lager
+      skip, // z. B. 250-g-Rollen: nicht nachkaufen
       weight, // Kaufgewicht der nächsten Rolle
-      price, // zuletzt bezahlt oder null
-      priceFrom: ownPrice ? 'sorte' : price ? 'material' : '',
+      price, // Preisliste, zuletzt bezahlt oder null
+      priceFrom: entry ? 'liste' : ownPrice ? 'sorte' : price ? 'material' : '',
       estimate: price ? cents((price.perKg * weight) / 1000) : null,
     });
   }
-  items.sort((a, b) => Number(b.buy) - Number(a.buy) || a.material.localeCompare(b.material, 'de')
+  items.sort((a, b) => Number(b.buy) - Number(a.buy) || Number(a.skip) - Number(b.skip) || a.material.localeCompare(b.material, 'de')
     || (a.colorName || '').localeCompare(b.colorName || '', 'de'));
   const buy = items.filter((i) => i.buy);
   return {
     items,
     buy,
-    spare: items.filter((i) => !i.buy),
+    spare: items.filter((i) => !i.buy && !i.skip),
+    skip: items.filter((i) => i.skip),
     total: cents(buy.reduce((a, i) => a + (i.estimate || 0), 0)),
     unknown: buy.filter((i) => i.estimate === null).length, // ohne bekannten Preis
   };

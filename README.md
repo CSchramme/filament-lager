@@ -26,6 +26,8 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
 - **Drucke**: Belege mit der Aufteilung des Preises pro Teil, Angebote, die mit einem Klick zum
   Beleg werden, Umsatz und Gewinn, Stromabrechnung für den, der den Strom bezahlt, und der
   Druckverlauf von Bambu mit Kosten je Druck.
+- **Preisliste**: Einkaufspreis je Filamentart (PLA Basic 19,99 €), gilt für neue Rollen und Rollen
+  ohne eigenen Preis; Filamentart im Spulen-Dialog als Auswahl mit Suche.
 - **Vorrat**: mehrere gleiche Teile auf einmal drucken (z. B. 25 Kürbisse) und einzeln verkaufen;
   die Arbeit verteilt sich auf alle Teile, der Vorrat zählt mit.
 - **Etiketten mit QR-Code** zum Aufkleben auf die Spulen. Scannen mit der Handykamera öffnet die
@@ -208,7 +210,7 @@ aus dem Lager wählen und den Preis ablesen:
 
 | Posten | Rechnung | Standard |
 |---|---|---|
-| Filament | Gramm × Kaufpreis der Rolle ÷ Kaufgewicht | ohne Kaufpreis 20 € pro kg |
+| Filament | Gramm × Kaufpreis der Rolle ÷ Kaufgewicht | sonst Preisliste (PLA Basic 19,99 € pro kg), sonst 20 € pro kg |
 | Strom | Druckzeit × Leistung des Druckers × Strompreis | 120 W, 0,30 € pro kWh |
 | Drucker | Druckzeit × Stundensatz für Abnutzung, Düsen, Platten, Ersatzteile | 0,30 € pro Stunde |
 | Fehldrucke | Zuschlag auf Filament + Strom, weil nicht jeder Druck klappt | 10 % |
@@ -228,14 +230,25 @@ auf dem Beleg genau aufgehen.
 
 - **Gramm:** Bei einer in Bambu Studio geslicten 3MF (nach dem Slicen über Datei → Exportieren die
   geslicte Platte als `.gcode.3mf` speichern) nimmt der Rechner die genauen Gramm und zeigt die Druckzeit. Bei einer STL oder
-  ungeslicten 3MF schätzt er aus Volumen und Oberfläche (Außenhaut voll, Inneres mit 15 % Infill,
-  einstellbar). Stützen sind in der Schätzung nicht enthalten. Gramm lassen sich auch von Hand eintragen.
-- **Kaufpreis:** Für jede Rolle eintragen, was sie gekostet hat: im Bearbeiten-Dialog unter
-  „Kaufpreis der Rolle in €“ oder direkt im Rechner, der danach fragt, wenn er fehlt. Bis dahin
-  rechnet er mit dem Standardpreis pro kg aus den Einstellungen.
-- **Druckzeit:** kommt aus einer geslicten 3MF oder dem Druckverlauf; sonst von Hand eintragen
-  (z. B. `1:30`). Ohne Druckzeit fehlen Strom und Drucker im Preis. Die Leistung hängt vom Modell
-  und Material ab, 120 W ist ein Richtwert für PLA.
+  ungeslicten 3MF schätzt er aus Volumen und Oberfläche (Außenhaut voll, Inneres mit Infill).
+  Stützen sind in der Schätzung nicht enthalten. Gramm lassen sich auch von Hand eintragen.
+- **Infill:** steht direkt im Rechner, Standard 15 % (unter Einstellungen änderbar). Für eine
+  Rechnung einfach überschreiben, „zurücksetzen“ holt den Standard. Gebraucht wird er nur für die
+  Schätzung aus einer STL; bei Gramm aus Bambu Studio steckt der Infill schon drin.
+- **Gleiche Teile pro Druck:** Druckst du z. B. 5 gleiche Teile auf einer Platte, hier 5 eintragen.
+  Gramm und Druckzeit gelten dann für den ganzen Druck und werden auf die Teile verteilt, die
+  Anzahl wird mindestens 5. Bei einer geslicten 3MF erkennt der Rechner gleiche Teile auf der
+  Platte selbst. Auch „Zum Beleg“ im Druckverlauf fragt, wie viele gleiche Teile auf der Platte waren.
+- **Kaufpreis:** kommt von der Rolle (Bearbeiten-Dialog „Kaufpreis der Rolle in €“), sonst aus der
+  **Preisliste** der Filamentart, sonst vom Standardpreis pro kg. Fehlt beides, fragt der Rechner nach.
+- **Druckzeit:** kommt aus einer geslicten 3MF oder dem Druckverlauf, oder von Hand (z. B. `1:30`).
+  Fehlt sie, **schätzt der Rechner sie aus dem Gewicht**: Vorlauf (Aufheizen, Kalibrieren) plus
+  Minuten pro Gramm, gelernt aus deinen fertigen Drucken im Bambu-Verlauf (ab 3 Drucken; Ausreißer
+  wie über Nacht pausierte Drucke zählen nicht). Ohne Verlauf gelten Richtwerte für einen
+  Bambu-Drucker mit 0,2-mm-Profil (5 Min. + 2,4 Min. pro Gramm). Geschätzte Zeiten stehen mit „ca.“
+  da. Genau wird es nur mit Bambu Studio: Ein echter Slicer steckt nicht in der Website, weil die
+  Zeit von Bambus Druckerprofilen abhängt; dafür die geslicte `.gcode.3mf` hochladen. Die Leistung
+  hängt vom Modell und Material ab, 120 W ist ein Richtwert für PLA.
 - Der Rechner zeigt, ob die gewählte Rolle reicht, und schlägt sonst Rollen in derselben Farbe vor.
   „… g von #5 abziehen“ verbucht den Druck direkt im Lager. „Angebot kopieren“ legt einen kurzen
   Text mit Modell, Farbe und Preis in die Zwischenablage. „Zum Beleg hinzufügen“ legt das Teil in
@@ -274,6 +287,30 @@ Unter **Drucke**:
 
 Den Druckverlauf liefert die inoffizielle Bambu-Schnittstelle (`/v1/user-service/my/tasks`); bekannt
 sind die Status „fertig“ und „abgebrochen“.
+
+## Preisliste
+
+Im Reiter **Preisliste** steht jede Filamentart mit ihrem Einkaufspreis pro Rolle, die im Lager zuerst,
+darunter die bekannten Bambu-Sorten; die Suche oben filtert. **PLA Basic** ist mit **19,99 € pro
+1-kg-Rolle** voreingestellt. Ein Preis gilt:
+
+- für **neue Rollen**: Beim Anlegen wird er als Kaufpreis eingetragen, wenn das Feld leer bleibt;
+- für **Rollen ohne eigenen Kaufpreis** (z. B. aus dem Bambu-Abgleich): Rechner, Lagerwert und
+  Einkaufsliste rechnen damit;
+- **anteilig** nach Gewicht: Bei 19,99 € pro 1.000 g kostet eine 250-g-Rolle 5,00 €.
+
+„Auf Rollen übertragen“ trägt den Preis bei allen Rollen dieser Art ein, die noch keinen haben, auf
+Wunsch auch bei Rollen mit anderem Preis. Beim ersten Start nach dem Update bekommen alle PLA-Basic-
+Rollen ohne Preis automatisch den Listenpreis; Rollen mit eigenem Preis bleiben, wie sie sind.
+Änderungen in der Liste werden sofort gespeichert. Ohne Eintrag gilt der Standardpreis pro kg.
+
+Darunter steht, welche **Rollengrößen nicht nachgekauft** werden: Standard sind die 250-g-Rollen.
+Sie kommen nicht unter „Nachkaufen“ auf die Einkaufsliste, sondern zusammengeklappt unter „Nicht
+nachkaufen“. Ist dieselbe Farbe auch als 1-kg-Rolle knapp, schlägt die Liste 1 kg vor.
+
+Im Bearbeiten-Dialog einer Spule ist die **Filamentart** eine Auswahl mit Suche: tippen (z. B.
+„matte“), mit den Pfeiltasten wählen und Enter, oder antippen. Neben jeder Art steht ihr Preis aus
+der Liste. Eine neue Art lässt sich direkt eintippen.
 
 ## Vorrat: viele gleiche Teile, einzeln verkauft
 
@@ -461,7 +498,7 @@ Aufbau:
 - `public/js/calculator.js` – Rechner, `public/js/model.js` – STL/3MF lesen
 - `public/js/prints.js` – Belege, Angebote, Strom und Druckverlauf, `public/js/sales.js` – offener
   Beleg, `public/js/documents.js` – druckbare Belege, Angebote und Abrechnungen
-- `public/js/stock.js` – Vorrat (anlegen, verkaufen, ändern)
+- `public/js/stock.js` – Vorrat (anlegen, verkaufen, ändern), `public/js/preise.js` – Reiter Preisliste
 - `public/js/qr.js` – QR-Codes (ohne Bibliothek), `public/js/labels.js` – Etiketten,
   `public/js/shopping.js` – Einkaufsliste
 - `public/js/stats.js` – Zahlen der Auswertung, `public/js/charts.js` – Diagramme,

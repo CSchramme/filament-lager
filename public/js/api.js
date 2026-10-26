@@ -2,8 +2,8 @@
 // alle Änderungen dorthin. Ohne Server (z. B. als statische Seite) speichert
 // das Lager im Browser; die Bambu-Anbindung ist dann nicht verfügbar.
 import {
-  applyStockSale, assignNumbers, mergeStock, newId, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
-  normalizeSettings, normalizeSpool, normalizeStockItem, placeList, planMove, planPlaces, saleFromOffer, salesSummary,
+  applyPriceChanges, applyStockSale, assignNumbers, mergeStock, migratePriceList, newId, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
+  normalizeSettings, normalizeSpool, normalizeStockItem, placeList, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
 } from './domain.js';
 import { seedSpools } from './seed.js';
 
@@ -46,6 +46,7 @@ class ServerBackend {
   notifySettings() { return this.req('GET', 'api/benachrichtigungen'); }
   saveNotify(body) { return this.req('PUT', 'api/benachrichtigungen', body); }
   testNotify() { return this.req('POST', 'api/benachrichtigungen/test', {}); }
+  applyPriceList(material, overwrite) { return this.req('POST', 'api/preisliste/uebernehmen', { material, overwrite }); }
   stock() { return this.req('GET', 'api/vorrat'); }
   addStock(item) { return this.req('POST', 'api/vorrat', item); }
   updateStock(id, patch) { return this.req('PUT', 'api/vorrat/' + encodeURIComponent(id), patch); }
@@ -134,6 +135,7 @@ class LocalBackend {
       // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
       for (const sale of [...data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(data, sale.date);
       data.settings.places = placeList(data.settings, data.spools);
+      if (migratePriceList(raw.settings, data)) this.write(data);
       return assignNumbers(data);
     }
     const data = {
@@ -217,6 +219,13 @@ class LocalBackend {
     data.sales = data.sales.map((x) => (x.id === id ? normalizeSale({ ...x, ...patch, id: x.id, nr: x.nr, createdAt: x.createdAt }) : x));
     this.write(data);
     return this.salesView(data);
+  }
+
+  async applyPriceList(material, overwrite) {
+    const data = this.load();
+    const changed = applyPriceChanges(data.spools, priceListChanges(data.spools, data.settings, { material, overwrite }));
+    this.write(data);
+    return { changed, spools: data.spools };
   }
 
   async stock() {

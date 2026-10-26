@@ -92,6 +92,12 @@ test('Gesliceter 3MF aus Bambu Studio: Gramm und Druckzeit', async () => {
     <plate><metadata key="index" value="2"/><metadata key="prediction" value="600"/><metadata key="weight" value="3.00"/></plate>
   </config>`;
   assert.deepEqual(parseSliceInfo(info), { slicedGrams: 15.34, slicedSeconds: 4320, plates: 2 });
+  // 5 gleiche Kürbisse auf einer Platte (einer übersprungen zählt nicht), verschiedene Teile nicht
+  const five = `<config><plate><metadata key="prediction" value="21600"/><metadata key="weight" value="60"/>
+    ${['Kürbis.stl', 'Kürbis.stl_1', 'Kürbis (2).stl', 'Kürbis_3.stl', 'Kürbis.stl', 'Kürbis.stl'].map((n, i) => `<object identify_id="${i}" name="${n.replace('.stl_1', '_1.stl')}" skipped="${i === 5}" />`).join('')}</plate></config>`;
+  assert.equal(parseSliceInfo(five).slicedParts, 5);
+  const mixed = `<config><plate><metadata key="weight" value="20"/><object name="Kürbis" skipped="false"/><object name="Deckel" skipped="false"/></plate></config>`;
+  assert.equal(parseSliceInfo(mixed).slicedParts, undefined);
   const m = await parseModelFile('teil.gcode.3mf', zip({ 'Metadata/slice_info.config': info, '3D/Objects/object_1.model': modelXml(cube(20)) }));
   assert.equal(m.format, '3MF (gesliced)');
   assert.equal(m.slicedGrams, 15.34);
@@ -109,7 +115,9 @@ test('Gewicht schätzen und Preis mit allen Posten', () => {
   const settings = defaultSettings();
   const spool = normalizeSpool({ purchaseWeight: 1000, price: '24,99' });
   assert.equal(pricePerGram(spool, settings), 0.02499);
-  assert.equal(pricePerGram(normalizeSpool({ purchaseWeight: 1000 }), settings), 0.02);
+  // Ohne eigenen Preis: Preisliste (PLA Basic 19,99 € pro kg), sonst Standardpreis 20 € pro kg
+  assert.ok(Math.abs(pricePerGram(normalizeSpool({ purchaseWeight: 1000 }), settings) - 0.01999) < 1e-12);
+  assert.equal(pricePerGram(normalizeSpool({ material: 'PETG HF', purchaseWeight: 1000 }), settings), 0.02);
   const strom = energyCost(7200, settings);
   assert.ok(Math.abs(strom - 0.072) < 1e-9); // 2 Std. × 120 W × 0,30 €/kWh
 

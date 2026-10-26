@@ -594,16 +594,7 @@ async function onHistoryClick(e) {
     openJob(task, ctx.app.spools);
     ctx.go('rechner');
   }
-  if (b.dataset.task === 'add') {
-    const q = quoteFor(task);
-    const main = q.parts.filter((p) => p.spool).sort((a, c) => c.grams - a.grams)[0];
-    const draft = addPosition({
-      title: task.title, qty: 1, grams: q.grams, seconds: q.seconds, perGram: q.perGram, spool: main ? main.spool : null, taskId: task.id,
-    });
-    updateDraft();
-    toast(`„${task.title}“ zum Beleg hinzugefügt (${plural(draft.positions.length, 'Position', 'Positionen')})`);
-    ctx.root.querySelector('#draft').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
+  if (b.dataset.task === 'add') addTaskDialog(task);
   if (b.dataset.task === 'stock') {
     // Ein Druck mit n Teilen auf der Platte: Gramm und Zeit pro Teil, Arbeit verteilt
     const q = quoteFor(task);
@@ -624,6 +615,47 @@ async function onHistoryClick(e) {
     });
   }
   if (b.dataset.task === 'reprint') reprintDialog(task);
+}
+
+// Druck auf den Beleg: Waren mehrere gleiche Teile auf der Platte, werden
+// Gramm und Druckzeit auf die Teile verteilt.
+function addTaskDialog(task) {
+  const q = quoteFor(task);
+  const main = q.parts.filter((p) => p.spool).sort((a, c) => c.grams - a.grams)[0];
+  const quoteN = (n) => priceQuote({
+    grams: q.grams / n, perGram: q.perGram, seconds: q.seconds / n, qty: n,
+  }, ctx.app.settings);
+  const count = (form) => Math.max(1, Math.round(Number(form.elements.per.value)) || 1);
+  openDialog({
+    title: 'Zum Beleg',
+    body: `<p><strong>${esc(task.title)}</strong> · ${fmtNum(q.grams)} g${q.seconds ? ` · ${fmtDuration(q.seconds)}` : ''}</p>
+      <div class="fields"><label class="field"><span>Gleiche Teile auf der Platte</span><input name="per" type="number" min="1" step="1" inputmode="numeric" value="1"></label></div>
+      <p data-sum></p>
+      <p class="small muted">Alle Teile kommen auf den Beleg. Willst du sie einzeln verkaufen, nimm im Druckverlauf „Auf Vorrat“.</p>`,
+    foot: '<span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Hinzufügen</button>',
+    onReady(dlg, form) {
+      const update = () => {
+        const n = count(form);
+        const r = quoteN(n);
+        dlg.querySelector('[data-sum]').textContent = n > 1
+          ? `${n} × ${fmtEur(r.piece)} = ${fmtEur(r.sum)} (pro Teil ${fmtNum(r.grams)} g, Selbstkosten ${fmtEur(r.cost)})`
+          : `Preis ${fmtEur(r.piece)}, Selbstkosten ${fmtEur(r.cost)}`;
+      };
+      form.elements.per.addEventListener('input', update);
+      update();
+      form.elements.per.select();
+    },
+    onSubmit(form) {
+      const n = count(form);
+      const draft = addPosition({
+        title: task.title, qty: n, grams: q.grams / n, seconds: q.seconds / n, perGram: q.perGram, spool: main ? main.spool : null, taskId: task.id,
+      });
+      updateDraft();
+      updateStock();
+      toast(`${n > 1 ? `${n} × ` : ''}„${task.title}“ zum Beleg hinzugefügt (${plural(draft.positions.length, 'Position', 'Positionen')})`);
+      ctx.root.querySelector('#draft').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+  });
 }
 
 // Bambu lässt Druckstarts nur aus den eigenen Apps zu, deshalb hier nur der Weg dorthin.

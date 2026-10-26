@@ -12,6 +12,7 @@ const kg = (g) => (g >= 1000 ? `${String(g / 1000).replace('.', ',')} kg` : `${f
 
 function priceText(i) {
   if (!i.price) return 'Preis unbekannt';
+  if (i.priceFrom === 'liste') return `${fmtEur(i.price.price)} pro ${kg(i.price.weight)} laut Preisliste`;
   const from = i.priceFrom === 'sorte' ? `zuletzt bei #${i.price.nr}` : `${i.material} zuletzt bei #${i.price.nr}`;
   return `${fmtEur(i.price.perKg)} pro kg, ${from}`;
 }
@@ -29,9 +30,9 @@ function row(i) {
   return `<div class="shop-row">
     <span class="dot-color" style="background:${esc(i.colorHex)}"></span>
     <span class="shop-name"><span><strong>${esc(sortName(i))}</strong>${i.brand ? ` <span class="muted">· ${esc(i.brand)}</span>` : ''}</span>
-      <span class="small muted">${i.buy ? `Rest: ${esc(rolls(i.low))}` : `${esc(rolls(i.low))} knapp, Ersatz: ${esc(rolls(i.spare))}`}</span></span>
+      <span class="small muted">${i.spare.length ? `${esc(rolls(i.low))} knapp, Ersatz: ${esc(rolls(i.spare))}` : `Rest: ${esc(rolls(i.low))}`}</span></span>
     <span class="shop-price"><span class="num">${i.buy ? `${kg(i.weight)}${i.estimate !== null ? ` · ${fmtEur(i.estimate)}` : ''}` : ''}</span>
-      <span class="small muted">${esc(priceText(i))}</span></span>
+      ${i.skip ? '' : `<span class="small muted">${esc(priceText(i))}</span>`}</span>
   </div>`;
 }
 
@@ -41,9 +42,12 @@ export function openShoppingList(app) {
     ? '<p>Keine Rolle ist knapp. Nichts nachzukaufen.</p>'
     : `${list.buy.length ? `<h3>Nachkaufen</h3><div class="shop-list">${list.buy.map(row).join('')}</div>
         <p class="shop-total">${list.total ? `Zusammen ca. <strong>${fmtEur(list.total)}</strong>${list.unknown ? ` <span class="small muted">plus ${list.unknown} ohne bekannten Preis</span>` : ''}`
-    : '<span class="small muted">Ohne Kaufpreise keine Schätzung. Trag beim Bearbeiten einer Rolle ein, was sie gekostet hat.</span>'}</p>` : '<p>Für alle knappen Rollen liegt schon Ersatz im Lager.</p>'}
+    : '<span class="small muted">Ohne Preise keine Schätzung. Trag die Preise im Reiter „Preisliste“ ein.</span>'}</p>` : `<p>Nichts nachzukaufen.${list.spare.length ? ' Für die knappen Rollen liegt schon Ersatz im Lager.' : ''}</p>`}
       ${list.spare.length ? `<h3>Knapp, aber Ersatz im Lager</h3><div class="shop-list">${list.spare.map(row).join('')}</div>` : ''}
-      <p class="small muted">Knapp heißt: weniger als 1/${app.settings.lowStockPart} der Rolle übrig. Der Preis stammt vom Kaufpreis der Rollen im Lager.</p>`;
+      ${list.skip.length ? `<details><summary>Nicht nachkaufen (${list.skip.length})</summary>
+        <p class="small muted">Knapp, aber Rollen mit ${app.settings.noRebuyWeights.map((w) => kg(w)).join(' oder ')} kaufst du nicht nach (einstellbar unter „Preisliste“).</p>
+        <div class="shop-list">${list.skip.map(row).join('')}</div></details>` : ''}
+      <p class="small muted">Knapp heißt: weniger als 1/${app.settings.lowStockPart} der Rolle übrig. Der Preis stammt aus der Preisliste, sonst vom Kaufpreis der Rollen im Lager.</p>`;
   openDialog({
     title: 'Einkaufsliste',
     body,

@@ -2,7 +2,7 @@
 // Filamentverbrauch pro Monat und nach Farbe aus dem Bambu-Druckverlauf
 // (ohne Verlauf aus den Belegen), Bestseller und Strom.
 import {
-  colorNameFor, energyCost, energyKwh, matchSpool, stockValue,
+  colorNameFor, energyCost, energyKwh, matchSpool, priceSource, stockValue,
 } from './domain.js';
 
 const cents = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
@@ -154,7 +154,7 @@ export function computeStats({
     stock: {
       value: stockValue(spools, settings),
       grams: spools.reduce((a, s) => a + s.netWeight, 0),
-      unpriced: spools.filter((s) => s.price === null && s.netWeight > 0).length,
+      unpriced: spools.filter((s) => s.netWeight > 0 && priceSource(s, settings).kind === 'standard').length,
     },
   };
 }

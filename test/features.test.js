@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import {
-  applyStockSale, defaultSettings, mergeStock, nextOfferNr, normalizeOffer, normalizeSale, normalizeSpool, normalizeStockItem, offerStatus,
-  priceQuote, saleFromOffer, shoppingList, stockFromQuote, stockSaleItem, stockValue,
+  applyStockSale, defaultSettings, filamentTypes, listPriceForWeight, mergeStock, migratePriceList, nextOfferNr, normalizeOffer, normalizeSale,
+  normalizeSettings, normalizeSpool, normalizeStockItem, offerStatus, priceListChanges, priceQuote, priceSource, saleFromOffer, shoppingList,
+  stockFromQuote, stockSaleItem, stockValue, DEFAULT_PRINT_RATE, estimateSeconds, printRate,
 } from '../public/js/domain.js';
+import { Store } from '../src/store.js';
 import {
   addPosition, draftTotals, loadDraft, saleFromDraft, saveDraft,
 } from '../public/js/sales.js';
@@ -27,7 +32,8 @@ test('Einkaufsliste: knappe Sorten, Ersatz im Lager, zuletzt bezahlter Preis', (
     spool({ nr: 6, colorName: 'Blau', netWeight: 500, price: 25, createdAt: '2026-08-01T00:00:00Z' }),
     spool({ nr: 7, colorName: 'Grün', material: 'PETG HF', netWeight: 10 }),
   ];
-  const list = shoppingList(spools, settings);
+  // ohne Preisliste und ohne Nachkauf-Regel: zuletzt bezahlte Preise
+  const list = shoppingList(spools, { ...settings, priceList: [], noRebuyWeights: [] });
   assert.deepEqual(list.buy.map((i) => i.colorName), ['Grün', 'Rot', 'Schwarz']); // nach Material, dann Farbe
   const schwarz = list.buy.find((i) => i.colorName === 'Schwarz');
   assert.deepEqual(schwarz.low.map((s) => [s.nr, s.level]), [[1, 'knapp'], [2, 'leer']]);
@@ -39,8 +45,19 @@ test('Einkaufsliste: knappe Sorten, Ersatz im Lager, zuletzt bezahlter Preis', (
   assert.deepEqual(list.spare.map((i) => [i.colorName, i.spare.map((s) => s.nr)]), [['Weiß', [4]]]);
   assert.equal(list.total, 47.99);
   assert.equal(list.unknown, 1);
-  // Lagerwert: Rest × Grammpreis (ohne Preis 20 € pro kg)
-  assert.equal(stockValue([spools[0], spools[3]], settings), 21.6); // 80 g × 1,999 ct + 1000 g × 2 ct
+  assert.deepEqual(list.skip, []);
+
+  // Standard: PLA Basic laut Preisliste 19,99 €, 250-g-Rollen nicht nachkaufen
+  const std = shoppingList(spools, settings);
+  assert.deepEqual(std.buy.map((i) => [i.colorName, i.priceFrom, i.weight, i.estimate]), [['Grün', '', 1000, null], ['Schwarz', 'liste', 1000, 19.99]]);
+  assert.deepEqual(std.skip.map((i) => [i.colorName, i.low.map((x) => x.nr)]), [['Rot', [5]]]);
+  assert.equal(std.total, 19.99);
+  // Ist eine 250-g-Rolle knapp und eine 1-kg-Rolle der Sorte auch, wird 1 kg vorgeschlagen
+  const mixed = shoppingList([spool({ nr: 8, colorName: 'Gelb', netWeight: 20, purchaseWeight: 250 }), spool({ nr: 9, colorName: 'Gelb', netWeight: 50 })], settings);
+  assert.deepEqual(mixed.buy.map((i) => [i.colorName, i.weight, i.estimate]), [['Gelb', 1000, 19.99]]);
+  // Lagerwert: Rest × Grammpreis (#4 ohne eigenen Preis: Preisliste 19,99 € pro kg)
+  assert.equal(stockValue([spools[0], spools[3]], settings), 21.59); // 80 g × 1,999 ct + 1000 g × 1,999 ct
+  assert.equal(stockValue([spools[0], spools[3]], { ...settings, priceList: [] }), 21.6); // sonst 20 € pro kg
 });
 
 test('Angebote: Nummer, gültig bis, Status und Beleg daraus', () => {
@@ -235,4 +252,77 @@ test('Offener Beleg: Vorrat ohne Mindestpreis, gleiche Teile zusammen', () => {
   const body = saleFromDraft(draft, settings, { date: '2026-10-25' });
   assert.deepEqual([body.items[0].stockId, body.items[0].batchQty, body.items[0].breakdown.piece, body.items[0].breakdown.profit], [item.id, 25, 0.5, 0.1]);
   assert.deepEqual([body.items[1].stockId, body.items[1].batchQty], ['', 1]);
+});
+
+test('Preisliste: Standard PLA Basic 19,99 €, Preisquelle je Rolle', () => {
+  assert.deepEqual(settings.priceList, [{ material: 'PLA Basic', price: 19.99, weight: 1000 }]);
+  assert.deepEqual(settings.noRebuyWeights, [250]);
+  const n = normalizeSettings({
+    priceList: [{ material: ' PLA Matte ', price: '24,99' }, { material: 'pla matte', price: 1 }, { material: 'PETG HF', price: '' }, { material: '', price: 5 }],
+    noRebuyWeights: ['500', 250, 250, 'x'],
+  });
+  assert.deepEqual(n.priceList, [{ material: 'PLA Matte', price: 24.99, weight: 1000 }]);
+  assert.deepEqual(n.noRebuyWeights, [250, 500]);
+  assert.equal(settings.defaultInfill, 15);
+  assert.deepEqual([normalizeSettings({ defaultInfill: '20,5' }).defaultInfill, normalizeSettings({ defaultInfill: 150 }).defaultInfill], [20.5, 100]);
+
+  const own = spool({ nr: 1, price: 18, purchaseWeight: 1000 });
+  const small = spool({ nr: 2, purchaseWeight: 250 });
+  const petg = spool({ nr: 3, material: 'PETG HF' });
+  assert.deepEqual([priceSource(own, settings).kind, priceSource(small, settings).kind, priceSource(petg, settings).kind], ['rolle', 'liste', 'standard']);
+  assert.equal(listPriceForWeight(settings.priceList[0], 250), 5); // 19,99 / 4 = 5,00
+  assert.equal(listPriceForWeight(settings.priceList[0], 750), 14.99);
+
+  // Übertragen: ohne Preis immer, anderer Preis nur mit overwrite
+  const spools = [own, small, petg, spool({ nr: 4, purchaseWeight: 1000, price: 19.99 })];
+  assert.deepEqual(priceListChanges(spools, settings), [{ id: small.id, patch: { price: 5 } }]);
+  assert.deepEqual(priceListChanges(spools, settings, { material: 'pla basic', overwrite: true }).map((c) => c.patch.price), [19.99, 5]);
+  assert.deepEqual(priceListChanges(spools, settings, { material: 'PETG HF' }), []);
+
+  // Filamentarten: im Lager zuerst, dann Preisliste und bekannte Sorten
+  const types = filamentTypes(spools, settings);
+  assert.deepEqual(types.slice(0, 2).map((t) => [t.material, t.count, Boolean(t.entry)]), [['PETG HF', 1, false], ['PLA Basic', 3, true]]);
+  assert.ok(types.some((t) => t.material === 'PLA Silk+' && t.count === 0));
+});
+
+test('Preisliste: vorhandene PLA-Basic-Rollen ohne Preis bekommen ihn einmalig', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lager-preise-'));
+  const file = path.join(dir, 'lager.json');
+  await fs.writeFile(file, JSON.stringify({
+    settings: { pricePerKg: 20, profitPct: 30, machineRate: 0.3 }, // von vor der Preisliste
+    spools: [
+      { id: 'a', material: 'PLA Basic', purchaseWeight: 1000, netWeight: 500 },
+      { id: 'b', material: 'PLA Basic', purchaseWeight: 250, netWeight: 80 },
+      { id: 'c', material: 'PLA Basic', purchaseWeight: 1000, netWeight: 900, price: 15 },
+      { id: 'd', material: 'PLA Translucent', purchaseWeight: 1000, netWeight: 900 },
+    ],
+  }));
+  const store = new Store(file);
+  await store.load();
+  assert.deepEqual(store.spools.map((x) => [x.id, x.price]), [['a', 19.99], ['b', 5], ['c', 15], ['d', null]]);
+  const saved = JSON.parse(await fs.readFile(file, 'utf8'));
+  assert.equal(saved.spools[1].price, 5);
+  assert.deepEqual(saved.settings.priceList, [{ material: 'PLA Basic', price: 19.99, weight: 1000 }]);
+  // Mit Preisliste gespeichert: keine zweite Übernahme
+  const data = { spools: [normalizeSpool({ material: 'PLA Basic' })], settings };
+  assert.equal(migratePriceList(saved.settings, data), 0);
+  assert.equal(data.spools[0].price, null);
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
+test('Druckzeit aus dem Gewicht schätzen, gelernt aus dem Druckverlauf', () => {
+  // Ohne Verlauf: 5 Min. Vorlauf + 2,4 Min. pro Gramm
+  assert.deepEqual(printRate([]), DEFAULT_PRINT_RATE);
+  assert.equal(estimateSeconds(31.2), 4793); // 300 s + 31,2 g × 144 s, gerundet = ca. 80 Min.
+  assert.equal(estimateSeconds(0), 0);
+  // Drucker braucht 6 Min. Vorlauf und 110 s pro Gramm; ein über Nacht pausierter Druck stört nicht
+  const tasks = Array.from({ length: 12 }, (_, i) => ({ status: 2, grams: 10 + i * 8, seconds: 360 + (10 + i * 8) * 110 }));
+  tasks.push({ status: 2, grams: 10, seconds: 60000 }, { status: 3, grams: 50, seconds: 300 }, { status: 2, grams: 0.5, seconds: 400 });
+  const r = printRate(tasks);
+  assert.deepEqual([r.setup, Math.round(r.perGram), r.prints], [360, 110, 12]);
+  assert.equal(estimateSeconds(100, r), 360 + 11000);
+  // Zu wenige Drucke: Richtwerte; unplausibler Vorlauf wird begrenzt
+  assert.equal(printRate(tasks.slice(0, 2)).prints, 0);
+  const odd = printRate([{ status: 2, grams: 10, seconds: 100 }, { status: 2, grams: 20, seconds: 4000 }, { status: 2, grams: 30, seconds: 7000 }].map((t) => ({ ...t, seconds: Math.max(t.seconds, 120) })));
+  assert.ok(odd.setup >= 0 && odd.perGram > 0);
 });

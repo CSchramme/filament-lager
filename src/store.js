@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  assignNumbers, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool,
+  assignNumbers, migratePriceList, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool,
   normalizeStockItem, placeList,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
@@ -64,6 +64,7 @@ export class Store {
       this.data.stock = (Array.isArray(raw.stock) ? raw.stock : []).map((x) => normalizeStockItem(x, { now: x.updatedAt }));
       assignNumbers(this.data);
       this.data.settings.places = placeList(this.data.settings, this.data.spools);
+      if (migratePriceList(raw.settings, this.data)) await this.save();
     } else {
       this.data = {
         version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '', tasks: [], sales: [], receiptSeq: {}, powerPayments: [],

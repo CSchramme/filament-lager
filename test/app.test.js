@@ -464,3 +464,19 @@ test('Vorrat: anlegen, einzeln verkaufen, Beleg löschen bringt Teile zurück', 
   assert.equal(saved.stock[0].onHand, 29);
   assert.deepEqual((await call('DELETE', '/api/vorrat/' + item.id)).body.stock, []);
 });
+
+test('Preisliste speichern und auf Rollen übertragen', async () => {
+  const state = (await call('GET', '/api/state')).body;
+  const settings = { ...state.settings, priceList: [...state.settings.priceList, { material: 'PLA Translucent', price: '24,99', weight: 1000 }], noRebuyWeights: [250, 500] };
+  const saved = await call('PUT', '/api/settings', settings);
+  assert.deepEqual(saved.body.settings.priceList.map((e) => [e.material, e.price]), [['PLA Basic', 19.99], ['PLA Translucent', 24.99]]);
+  assert.deepEqual(saved.body.settings.noRebuyWeights, [250, 500]);
+  const res = await call('POST', '/api/preisliste/uebernehmen', { material: 'PLA Translucent' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.changed, 1);
+  assert.equal(res.body.spools.find((x) => x.material === 'PLA Translucent').price, 24.99);
+  assert.equal((await call('POST', '/api/preisliste/uebernehmen', { material: 'PLA Translucent' })).body.changed, 0);
+  assert.equal((await call('POST', '/api/preisliste/uebernehmen', {})).status, 400);
+  // Einkaufsliste über die API kennt "nicht nachkaufen"
+  await call('PUT', '/api/settings', { ...saved.body.settings, noRebuyWeights: [250] });
+});

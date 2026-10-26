@@ -138,3 +138,125 @@ export function patchText(el, html) {
 
 // € pro kWh als Cent-Angabe: 0,3 -> "30", 0,3187 -> "31,87"
 export const fmtCt = (eurPerKwh) => new Intl.NumberFormat('de-DE', { maximumFractionDigits: 2 }).format(eurPerKwh * 100);
+
+// Auswahlfeld mit Suche: Tippen filtert die Liste, Pfeiltasten wählen, Enter
+// übernimmt, Escape schließt. Eigene Werte sind erlaubt. options() liefert
+// [{ value, hint }]; onPick(value) wird nach der Auswahl aufgerufen.
+let comboSeq = 0;
+export function combobox(input, { options, onPick = () => {}, newLabel = (v) => `„${v}“ neu anlegen` }) {
+  const id = `combo-${++comboSeq}`;
+  const wrap = document.createElement('div');
+  wrap.className = 'combo';
+  input.replaceWith(wrap);
+  wrap.append(input);
+  const list = document.createElement('ul');
+  list.className = 'combo-list';
+  list.id = id;
+  list.setAttribute('role', 'listbox');
+  list.hidden = true;
+  wrap.append(list);
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-expanded', 'false');
+  input.setAttribute('aria-controls', id);
+  input.autocomplete = 'off';
+  let items = [];
+  let active = -1;
+  let filtering = false; // erst nach dem Tippen filtern, beim Öffnen alles zeigen
+
+  const words = (v) => v.toLowerCase().split(/\s+/).filter(Boolean);
+  const render = () => {
+    const q = filtering ? input.value.trim() : '';
+    const all = options();
+    items = all.filter((o) => words(q).every((w) => o.value.toLowerCase().includes(w)));
+    if (q && !all.some((o) => o.value.toLowerCase() === q.toLowerCase())) items.push({ value: q, hint: '', isNew: true });
+    // Markiert ist der aktuelle Wert, beim Tippen der beste Treffer, "neu anlegen" nur ohne Treffer
+    active = items.length ? Math.max(0, items.findIndex((o) => !o.isNew && o.value === input.value)) : -1;
+    list.replaceChildren(...items.map((o, i) => {
+      const li = document.createElement('li');
+      li.id = `${id}-${i}`;
+      li.setAttribute('role', 'option');
+      li.dataset.index = String(i);
+      const name = document.createElement('span');
+      name.textContent = o.isNew ? newLabel(o.value) : o.value;
+      li.append(name);
+      if (o.hint) {
+        const hint = document.createElement('small');
+        hint.textContent = o.hint;
+        li.append(hint);
+      }
+      return li;
+    }));
+    if (!items.length) {
+      const li = document.createElement('li');
+      li.className = 'combo-empty';
+      li.textContent = 'Nichts gefunden';
+      list.append(li);
+    }
+    mark();
+  };
+  const mark = () => {
+    list.querySelectorAll('[role="option"]').forEach((li, i) => li.setAttribute('aria-selected', String(i === active)));
+    const cur = list.querySelector(`[data-index="${active}"]`);
+    if (cur) {
+      input.setAttribute('aria-activedescendant', cur.id);
+      cur.scrollIntoView({ block: 'nearest' });
+    } else input.removeAttribute('aria-activedescendant');
+  };
+  const open = () => {
+    render();
+    list.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+  };
+  const close = () => {
+    list.hidden = true;
+    filtering = false;
+    input.setAttribute('aria-expanded', 'false');
+  };
+  const pick = (i) => {
+    const o = items[i];
+    if (!o) return;
+    input.value = o.value;
+    close();
+    onPick(o.value);
+  };
+  input.addEventListener('focus', open);
+  input.addEventListener('click', () => { if (list.hidden) open(); });
+  input.addEventListener('input', () => {
+    filtering = true;
+    open();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (list.hidden) open();
+      else if (items.length) {
+        active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+        mark();
+      }
+    } else if (e.key === 'Enter' && !list.hidden && active >= 0) {
+      e.preventDefault();
+      pick(active);
+    } else if (e.key === 'Escape' && !list.hidden) {
+      e.preventDefault();
+      e.stopPropagation(); // nicht den Dialog schließen
+      close();
+    }
+  });
+  // mousedown statt click, damit das Feld den Fokus nicht vorher verliert
+  list.addEventListener('mousedown', (e) => {
+    const li = e.target.closest('[role="option"]');
+    if (!li) return;
+    e.preventDefault();
+    pick(Number(li.dataset.index));
+  });
+  input.addEventListener('blur', () => {
+    setTimeout(() => {
+      if (!list.hidden) {
+        close();
+        onPick(input.value.trim());
+      }
+    }, 120);
+  });
+  return { open, close };
+}

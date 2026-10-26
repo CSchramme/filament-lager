@@ -1,15 +1,16 @@
 import { createBackend } from './api.js';
 import {
-  BRANDS, COLOR_PRESETS, MATERIALS, PURCHASE_WEIGHTS, amsSlots, colorDistance, colorHexFor, colorNameFor, filamentTypeOf, grossOf,
-  lowStockLimit, netFromGross, normHex, parseCsv, placeList, placeName, remainingShare, spoolLabel, spoolPlace, spoolTypeOf,
-  spoolsFromRows, stockLevel, summarize, toCsv, weightPatch,
+  BRANDS, COLOR_PRESETS, PURCHASE_WEIGHTS, amsSlots, colorDistance, colorHexFor, colorNameFor, filamentTypeOf, filamentTypes, grossOf,
+  listPrice, listPriceForWeight, lowStockLimit, netFromGross, normHex, parseCsv, placeList, placeName, remainingShare, spoolLabel,
+  spoolPlace, spoolTypeOf, spoolsFromRows, stockLevel, summarize, toCsv, weightPatch,
 } from './domain.js';
 import {
-  download, esc, fmt, fmtKg, icons, openDialog, readFile, ring, timeAgo, toast,
+  combobox, download, esc, fmt, fmtEur, fmtKg, icons, openDialog, readFile, ring, timeAgo, toast,
 } from './ui.js';
 import { renderAuswertung } from './auswertung.js';
 import { renderCalculator } from './calculator.js';
 import { openLabels } from './labels.js';
+import { renderPreise } from './preise.js';
 import { renderPrints } from './prints.js';
 import { qrSvg } from './qr.js';
 import { openShoppingList } from './shopping.js';
@@ -51,7 +52,21 @@ async function init() {
   }
   document.querySelector('.tabs').addEventListener('click', (e) => {
     const b = e.target.closest('[data-view]');
-    if (b) go(b.dataset.view);
+    if (!b) return;
+    setMenu(false);
+    go(b.dataset.view);
+  });
+  // Hamburger-Menü am Handy
+  const menuBtn = document.getElementById('menu-btn');
+  menuBtn.addEventListener('click', () => setMenu(!document.querySelector('.tabs').classList.contains('open')));
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.topbar')) setMenu(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.querySelector('.tabs').classList.contains('open')) {
+      setMenu(false);
+      menuBtn.focus();
+    }
   });
   $view.addEventListener('click', onClick);
   $view.addEventListener('input', onInput);
@@ -102,6 +117,7 @@ function initDragAndDrop() {
 
 function renderLogin() {
   document.querySelector('.tabs').hidden = true;
+  document.getElementById('menu-btn').hidden = true;
   $view.innerHTML = `<section class="panel login">
     <div class="panel-head"><h2>Anmelden</h2></div>
     <form class="fields" id="login-form">
@@ -127,6 +143,7 @@ function renderLogin() {
 
 function renderLocked() {
   document.querySelector('.tabs').hidden = true;
+  document.getElementById('menu-btn').hidden = true;
   $view.innerHTML = `<section class="panel login">
     <div class="panel-head"><h2>Passwort fehlt</h2></div>
     <p>Das Lager läuft auf einem Webserver und bleibt ohne Passwort gesperrt, damit niemand aus dem Internet deinen Bestand ändern kann.</p>
@@ -146,6 +163,13 @@ async function reload() {
 
 const findSpool = (id) => app.spools.find((s) => s.id === id);
 
+function setMenu(open) {
+  const btn = document.getElementById('menu-btn');
+  document.querySelector('.tabs').classList.toggle('open', open);
+  btn.setAttribute('aria-expanded', String(open));
+  btn.setAttribute('aria-label', open ? 'Menü schließen' : 'Menü öffnen');
+}
+
 function go(view) {
   if (location.hash !== '#' + view) location.hash = view;
   else route();
@@ -163,16 +187,19 @@ function route() {
     return;
   }
   const v = location.hash.slice(1);
-  app.view = ['lager', 'plaetze', 'rechner', 'drucke', 'auswertung', 'bambu', 'einstellungen'].includes(v) ? v : 'lager';
+  app.view = ['lager', 'plaetze', 'preise', 'rechner', 'drucke', 'auswertung', 'bambu', 'einstellungen'].includes(v) ? v : 'lager';
   document.querySelectorAll('.tab').forEach((t) => {
-    if (t.dataset.view === app.view) t.setAttribute('aria-current', 'page');
-    else t.removeAttribute('aria-current');
+    if (t.dataset.view === app.view) {
+      t.setAttribute('aria-current', 'page');
+      document.getElementById('menu-label').textContent = t.textContent;
+    } else t.removeAttribute('aria-current');
   });
   clearInterval(app.poll);
   app.selected.clear();
   document.body.classList.remove('has-movebar');
   if (app.view === 'lager') renderLager();
   else if (app.view === 'plaetze') renderPlaces();
+  else if (app.view === 'preise') renderPreise($view, app);
   else if (app.view === 'rechner') renderCalculator($view, app, { spoolUpdated, go });
   else if (app.view === 'drucke') renderPrints($view, app, { go });
   else if (app.view === 'auswertung') renderAuswertung($view, app);
@@ -386,14 +413,14 @@ function spoolDialog(spool, { copy = false } = {}) {
 
   const body = `
     <div class="fields">
-      <label class="field"><span>Material</span><input name="material" list="dl-mat" value="${esc(s.material)}" required></label>
+      <label class="field"><span>Filamentart</span><input name="material" value="${esc(s.material)}" required placeholder="suchen, z. B. PLA Matte"></label>
       <label class="field"><span>Hersteller</span><input name="brand" list="dl-brand" value="${esc(s.brand)}"></label>
       <div class="field full"><span>Farbe</span>
         <div class="color-row"><input name="colorName" list="dl-color" value="${esc(s.colorName)}" placeholder="z. B. Kürbis Orange" aria-label="Farbname"><input type="color" name="colorHex" value="${esc(s.colorHex)}" aria-label="Farbton"></div>
       </div>
       <div class="swatches full">${COLOR_PRESETS.map((c) => `<button type="button" class="swatch" data-hex="${c.hex}" data-name="${esc(c.name)}" title="${esc(c.name)}" aria-label="${esc(c.name)}" aria-pressed="${c.hex === s.colorHex}" style="background:${c.hex}"></button>`).join('')}</div>
       <label class="field"><span>Kaufgewicht in g</span><input name="purchaseWeight" type="number" inputmode="numeric" min="0" step="1" list="dl-weights" value="${s.purchaseWeight}"></label>
-      <label class="field"><span>Kaufpreis der Rolle in €</span><input name="price" inputmode="decimal" value="${s.price === null || s.price === undefined ? '' : esc(String(s.price).replace('.', ','))}" placeholder="leer: ${esc(String(app.settings.pricePerKg).replace('.', ','))} € pro kg"></label>
+      <label class="field"><span>Kaufpreis der Rolle in €</span><input name="price" inputmode="decimal" value="${s.price === null || s.price === undefined ? '' : esc(String(s.price).replace('.', ','))}"><small class="muted" data-price-hint></small></label>
       <label class="field"><span>Spulenart</span><select name="spoolTypeId">${types.map((t) => `<option value="${esc(t.id)}" ${t.id === s.spoolTypeId ? 'selected' : ''}>${esc(t.name)} (Tara ${fmt(t.tare)} g)</option>`).join('')}</select></label>
       <label class="field"><span>Gewicht mit Spule in g</span><input name="gross" type="number" inputmode="numeric" min="0" step="1" value="${s.netWeight + tareFor(s.spoolTypeId)}"></label>
       <label class="field"><span>Restgewicht Filament in g</span><input name="netWeight" type="number" inputmode="numeric" min="0" step="1" value="${s.netWeight}"></label>
@@ -408,7 +435,6 @@ function spoolDialog(spool, { copy = false } = {}) {
     s.bambu.rfid ? 'RFID ' + esc(s.bambu.rfid.slice(0, 4) + '…' + s.bambu.rfid.slice(-4)) : '',
     s.bambu.slot ? 'Slot ' + esc(s.bambu.slot) : '',
   ].filter(Boolean).join(' · ')}</div>` : ''}
-    ${datalist('dl-mat', uniq([...MATERIALS, ...app.spools.map((x) => x.material)]))}
     ${datalist('dl-brand', uniq([...BRANDS, ...app.spools.map((x) => x.brand)]))}
     ${datalist('dl-color', COLOR_PRESETS.map((c) => c.name))}
     ${datalist('dl-weights', PURCHASE_WEIGHTS.map(String))}
@@ -425,6 +451,30 @@ function spoolDialog(spool, { copy = false } = {}) {
     onReady(dlg, form) {
       const f = form.elements;
       const tare = () => tareFor(f.spoolTypeId.value);
+      // Preis aus der Preisliste als Vorschlag, passend zum Kaufgewicht
+      const priceHint = () => {
+        const entry = listPrice(f.material.value, app.settings);
+        const w = Number(f.purchaseWeight.value) || 0;
+        const hint = dlg.querySelector('[data-price-hint]');
+        if (entry && w) {
+          const p = listPriceForWeight(entry, w);
+          f.price.placeholder = p.toFixed(2).replace('.', ',');
+          hint.textContent = `${isNew ? 'leer lassen' : 'leer'}: ${fmtEur(p)} laut Preisliste${w !== entry.weight ? ` (${fmtEur(entry.price)} pro ${fmt(entry.weight)} g)` : ''}`;
+        } else {
+          f.price.placeholder = '';
+          hint.textContent = `leer: Standardpreis ${fmtEur(app.settings.pricePerKg)} pro kg`;
+        }
+      };
+      combobox(f.material, {
+        options: () => filamentTypes(app.spools, app.settings).map((t) => ({
+          value: t.material,
+          hint: [t.entry ? `${fmtEur(t.entry.price)} / ${fmt(t.entry.weight)} g` : '', t.count ? `${t.count} im Lager` : ''].filter(Boolean).join(' · '),
+        })),
+        onPick: priceHint,
+        newLabel: (v) => `„${v}“ als neue Filamentart`,
+      });
+      f.purchaseWeight.addEventListener('input', priceHint);
+      priceHint();
       let nameAuto = !s.colorName;
       const markSwatch = () => form.querySelectorAll('.swatch').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.hex === normHex(f.colorHex.value))));
       f.colorName.addEventListener('input', () => {
@@ -489,14 +539,18 @@ function spoolDialog(spool, { copy = false } = {}) {
     },
     async onSubmit(form) {
       const f = form.elements;
-      if (!f.material.value.trim()) throw new Error('Bitte ein Material angeben.');
+      if (!f.material.value.trim()) throw new Error('Bitte eine Filamentart angeben.');
+      // Neue Rollen ohne Preis bekommen den Preis aus der Preisliste
+      const entry = listPrice(f.material.value, app.settings);
+      const listed = isNew && !f.price.value.trim() && entry && Number(f.purchaseWeight.value) > 0
+        ? listPriceForWeight(entry, Number(f.purchaseWeight.value)) : null;
       const data = {
-        material: f.material.value,
+        material: f.material.value.trim(),
         brand: f.brand.value,
         colorName: f.colorName.value,
         colorHex: f.colorHex.value,
         purchaseWeight: f.purchaseWeight.value,
-        price: f.price.value,
+        price: listed ?? f.price.value,
         netWeight: f.netWeight.value === '' ? f.purchaseWeight.value : f.netWeight.value,
         spoolTypeId: f.spoolTypeId.value,
         location: f.location.value,
@@ -1070,7 +1124,7 @@ function renderSettings() {
         <div class="actions"><button type="button" class="btn small" data-action="type-add">${icons.plus}Spulenart</button></div>
         <label class="field"><span>Als knapp markieren, wenn weniger übrig ist als</span><select name="lowStockPart">${[3, 4, 5, 6, 8, 10].map((n) => `<option value="${n}" ${n === app.settings.lowStockPart ? 'selected' : ''}>1/${n} des Kaufgewichts (bei 1.000 g: ${fmt(1000 / n)} g, bei 250 g: ${fmt(250 / n)} g)</option>`).join('')}</select></label>
         <h3>Preisrechnung</h3>
-        <label class="field"><span>Filamentpreis pro kg, wenn eine Rolle keinen eigenen Preis hat (€)</span><input name="pricePerKg" inputmode="decimal" value="${dec(app.settings.pricePerKg)}"></label>
+        <label class="field"><span>Standardpreis pro kg, wenn weder die Rolle noch die Preisliste einen Preis hat (€)</span><input name="pricePerKg" inputmode="decimal" value="${dec(app.settings.pricePerKg)}"><small class="muted">Preise je Filamentart stehen im Reiter „Preisliste“.</small></label>
         <div class="fields">
           <label class="field"><span>Strompreis (€ pro kWh)</span><input name="energyPrice" inputmode="decimal" value="${dec(app.settings.energyPrice)}"></label>
           <label class="field"><span>Drucker-Leistung beim Drucken (W)</span><input name="printerWatts" inputmode="numeric" value="${app.settings.printerWatts}"></label>
@@ -1080,6 +1134,7 @@ function renderSettings() {
           <label class="field"><span>Stundenlohn (€)</span><input name="laborRate" inputmode="decimal" value="${dec(app.settings.laborRate)}"></label>
           <label class="field"><span>Gewinn (% auf die Selbstkosten)</span><input name="profitPct" inputmode="decimal" value="${dec(app.settings.profitPct)}"></label>
           <label class="field"><span>Mindestpreis pro Beleg (€)</span><input name="minPrice" inputmode="decimal" value="${dec(app.settings.minPrice)}"></label>
+          <label class="field"><span>Standard-Infill für die Schätzung (%)</span><input name="defaultInfill" inputmode="decimal" value="${dec(app.settings.defaultInfill)}"><small class="muted">für STL-Dateien ohne Gramm aus Bambu Studio, im Rechner änderbar</small></label>
         </div>
         <h3>Beleg, Angebot und Strom</h3>
         <div class="fields">
@@ -1442,7 +1497,7 @@ const forms = {
     app.settings = await app.backend.saveSettings({
       ...app.settings, spoolTypes, lowStockPart: f.lowStockPart.value, amsUnits: f.amsUnits.value,
       ...Object.fromEntries(['pricePerKg', 'energyPrice', 'printerWatts', 'machineRate', 'failPct', 'laborMinutes', 'laborRate', 'profitPct', 'minPrice',
-        'sellerName', 'powerPayee', 'sellerAddress', 'offerDays'].map((k) => [k, f[k].value])),
+        'sellerName', 'powerPayee', 'sellerAddress', 'offerDays', 'defaultInfill'].map((k) => [k, f[k].value])),
       smallBusiness: f.smallBusiness.checked,
     });
     renderSettings();

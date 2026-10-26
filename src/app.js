@@ -1,8 +1,8 @@
 // HTTP-Schnittstelle des Filament-Lagers und Auslieferung der Weboberfläche.
 import express from 'express';
 import {
-  applyStockSale, colorNameFor, mergeStock, newId, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
-  normalizeSettings, normalizeSpool, normalizeStockItem, planMove, planPlaces, saleFromOffer, salesSummary,
+  applyPriceChanges, applyStockSale, colorNameFor, mergeStock, newId, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
+  normalizeSettings, normalizeSpool, normalizeStockItem, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import {
@@ -461,6 +461,15 @@ export function createApp({
     store.data.offers = store.data.offers.filter((x) => x.id !== req.params.id);
     await store.save();
     res.json(offersView());
+  });
+
+  // Preis aus der Preisliste bei den Rollen einer Filamentart eintragen.
+  app.post('/api/preisliste/uebernehmen', async (req, res) => {
+    const { material, overwrite } = req.body || {};
+    if (!material) throw new HttpError(400, 'Bitte eine Filamentart angeben.');
+    const changed = applyPriceChanges(store.spools, priceListChanges(store.spools, store.settings, { material, overwrite: overwrite === true }));
+    await store.save();
+    res.json({ changed, spools: store.spools });
   });
 
   // Vorrat: auf Vorrat gedruckte Teile, die einzeln verkauft werden.
