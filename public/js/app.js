@@ -15,6 +15,12 @@ import { renderPrints } from './prints.js';
 import { qrSvg } from './qr.js';
 import { openShoppingList } from './shopping.js';
 
+// Bereiche der App, in dieser Reihenfolge als Reiter bzw. im Menü
+const VIEWS = [
+  ['lager', 'Lager'], ['plaetze', 'Plätze'], ['preise', 'Preisliste'], ['rechner', 'Rechner'], ['drucke', 'Drucke'],
+  ['auswertung', 'Auswertung'], ['bambu', 'Bambu'], ['einstellungen', 'Einstellungen'],
+];
+
 const app = {
   backend: null, spools: [], settings: null, bambu: null, view: 'lager', poll: null, printersSig: '', selected: new Set(),
 };
@@ -36,6 +42,7 @@ function savePrefs() {
 // Start und Navigation
 
 async function init() {
+  document.getElementById('tabs').innerHTML = VIEWS.map(([key, label]) => `<button class="tab" type="button" data-view="${key}">${label}</button>`).join('');
   app.backend = await createBackend();
   const mode = document.getElementById('mode');
   const server = app.backend.mode === 'server';
@@ -187,7 +194,7 @@ function route() {
     return;
   }
   const v = location.hash.slice(1);
-  app.view = ['lager', 'plaetze', 'preise', 'rechner', 'drucke', 'auswertung', 'bambu', 'einstellungen'].includes(v) ? v : 'lager';
+  app.view = VIEWS.some(([key]) => key === v) ? v : 'lager';
   document.querySelectorAll('.tab').forEach((t) => {
     if (t.dataset.view === app.view) {
       t.setAttribute('aria-current', 'page');

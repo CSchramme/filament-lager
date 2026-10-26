@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { createApp } from '../src/app.js';
+import { assetVersion, createApp } from '../src/app.js';
 import { CloudError } from '../src/bambu/cloud.js';
 import { Store } from '../src/store.js';
 
@@ -479,4 +479,26 @@ test('Preisliste speichern und auf Rollen übertragen', async () => {
   assert.equal((await call('POST', '/api/preisliste/uebernehmen', {})).status, 400);
   // Einkaufsliste über die API kennt "nicht nachkaufen"
   await call('PUT', '/api/settings', { ...saved.body.settings, noRebuyWeights: [250] });
+});
+
+test('Versionskennung der Oberfläche gegen alte Dateien im Browser-Cache', async () => {
+  const res = await fetch(base + '/version.json');
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+  const info = await res.json();
+  assert.match(info.v, /^[0-9a-f]{10}$/);
+  assert.ok(info.modules.includes('js/app.js') && info.modules.includes('js/preise.js'));
+  assert.ok(info.modules.every((m) => m.endsWith('.js')));
+  const js = await fetch(base + '/js/app.js');
+  assert.equal(js.headers.get('cache-control'), 'no-cache');
+  const html = await (await fetch(base + '/')).text();
+  assert.match(html, /version\.json/);
+  // Ändert sich eine Datei, ändert sich die Kennung
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'lager-public-'));
+  await fs.mkdir(path.join(tmp, 'js'));
+  await fs.writeFile(path.join(tmp, 'js', 'app.js'), 'a');
+  const v1 = (await assetVersion(tmp)).v;
+  await fs.writeFile(path.join(tmp, 'js', 'app.js'), 'ab');
+  assert.notEqual((await assetVersion(tmp)).v, v1);
+  assert.deepEqual((await assetVersion(tmp)).modules, ['js/app.js']);
+  await fs.rm(tmp, { recursive: true, force: true });
 });

@@ -140,7 +140,10 @@ Wichtig:
 - Plesk hält die App an, wenn sie eine Weile nicht benutzt wird. Beim nächsten Öffnen startet
   sie neu, verbindet sich mit dem Drucker und gleicht sofort mit Bambu ab.
 - **Update:** neue Dateien hochladen (den Ordner `data/` dabei nicht überschreiben),
-  „NPM install“ und „App neu starten“.
+  „NPM install“ und „App neu starten“. Browser und Handys laden danach von selbst die neuen
+  Dateien: Die Seite fragt die App nach einer Versionskennung (`/version.json`) und lädt CSS und
+  Programm damit, statt alte Dateien aus dem Cache zu nehmen. Nur beim ersten Update auf diese
+  Version kann es nötig sein, die Seite einmal neu zu laden.
 
 ## Bambu Filament Manager verbinden
 

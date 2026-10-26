@@ -10,7 +10,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100..125,600..800&family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Mono:wght@500&display=swap">
-  <link rel="stylesheet" href="css/app.css">
+  <!-- CSS und Programm lädt das Skript unten mit Versionskennung; bis dahin unsichtbar -->
+  <style>html { background: #EEF1F4; } body { visibility: hidden; }</style>
 </head>
 <body>
   <header class="topbar">
@@ -22,16 +23,7 @@
       <button class="menu-btn" type="button" id="menu-btn" aria-expanded="false" aria-controls="tabs" aria-label="Menü öffnen">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg><span id="menu-label">Menü</span>
       </button>
-      <nav class="tabs" id="tabs" aria-label="Bereiche">
-        <button class="tab" type="button" data-view="lager">Lager</button>
-        <button class="tab" type="button" data-view="plaetze">Plätze</button>
-        <button class="tab" type="button" data-view="preise">Preisliste</button>
-        <button class="tab" type="button" data-view="rechner">Rechner</button>
-        <button class="tab" type="button" data-view="drucke">Drucke</button>
-        <button class="tab" type="button" data-view="auswertung">Auswertung</button>
-        <button class="tab" type="button" data-view="bambu">Bambu</button>
-        <button class="tab" type="button" data-view="einstellungen">Einstellungen</button>
-      </nav>
+      <nav class="tabs" id="tabs" aria-label="Bereiche"></nav>
       <span class="mode" id="mode" title="">lädt …</span>
     </div>
   </header>
@@ -42,6 +34,39 @@
 
   <div class="toasts" id="toasts" role="status"></div>
 
-  <script type="module" src="js/app.js"></script>
+  <script>
+    // Nach einem Update nie alte Dateien aus dem Browser-Cache mit neuen mischen:
+    // Versionskennung vom Server holen, dann CSS und alle Module mit ?v=… laden
+    // (Import-Map). Ohne Server (statische Seite) geht es ohne Kennung.
+    (function () {
+      function show() { document.body.style.visibility = 'visible'; }
+      function load(info) {
+        var v = info && info.v ? '?v=' + encodeURIComponent(info.v) : '';
+        if (v && info.modules && window.HTMLScriptElement && HTMLScriptElement.supports && HTMLScriptElement.supports('importmap')) {
+          var imports = {};
+          info.modules.forEach(function (m) { imports[new URL(m, location.href).href] = new URL(m + v, location.href).href; });
+          var map = document.createElement('script');
+          map.type = 'importmap';
+          map.textContent = JSON.stringify({ imports: imports });
+          document.head.appendChild(map);
+        }
+        var css = document.createElement('link');
+        css.rel = 'stylesheet';
+        css.href = 'css/app.css' + v;
+        css.onload = show;
+        css.onerror = show;
+        document.head.appendChild(css);
+        setTimeout(show, 3000);
+        var app = document.createElement('script');
+        app.type = 'module';
+        app.src = 'js/app.js' + v;
+        document.body.appendChild(app);
+      }
+      fetch('version.json', { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; })
+        .then(load);
+    })();
+  </script>
 </body>
 </html>

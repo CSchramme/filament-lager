@@ -1,4 +1,7 @@
 // HTTP-Schnittstelle des Filament-Lagers und Auslieferung der Weboberfläche.
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import express from 'express';
 import {
   applyPriceChanges, applyStockSale, colorNameFor, mergeStock, newId, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
@@ -16,6 +19,22 @@ import { createPublicApi, newApiKey } from './api-v1.js';
 import {
   EVENTS, newTopic, normalizeNotify, Notifier, validateNotify,
 } from './notify.js';
+
+// Versionskennung der Oberfläche aus Name, Größe und Änderungszeit der Module
+// und Stylesheets. index.html lädt damit "app.js?v=…", sodass der Browser nach
+// einem Update nie alte Dateien aus seinem Cache mit neuen mischt.
+export async function assetVersion(publicDir) {
+  const files = [];
+  for (const dir of ['js', 'css']) {
+    const names = await fs.readdir(path.join(publicDir, dir)).catch(() => []);
+    for (const name of names.filter((n) => /\.(js|css)$/.test(n)).sort()) {
+      const st = await fs.stat(path.join(publicDir, dir, name));
+      files.push({ file: `${dir}/${name}`, sig: `${st.size}:${Math.round(st.mtimeMs)}` });
+    }
+  }
+  const v = crypto.createHash('sha1').update(files.map((f) => `${f.file}:${f.sig}`).join('\n')).digest('hex').slice(0, 10);
+  return { v, modules: files.filter((f) => f.file.endsWith('.js')).map((f) => f.file) };
+}
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -35,7 +54,18 @@ export function createApp({
   app.set('trust proxy', 'loopback');
   app.use(express.json({ limit: '5mb' }));
   // Die Oberfläche selbst enthält keine Lagerdaten und ist ohne Anmeldung abrufbar.
-  app.use(express.static(publicDir));
+  // version.json gibt es nicht als Datei; auch auf Plesk, wo der Webserver die
+  // übrigen Dateien selbst ausliefert, beantwortet sie deshalb immer die App.
+  app.get('/version.json', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(await assetVersion(publicDir));
+  });
+  app.use(express.static(publicDir, {
+    // immer beim Server nachfragen (Antwort 304, wenn unverändert)
+    setHeaders: (res, file) => {
+      if (/\.(html|js|css)$/.test(file)) res.setHeader('Cache-Control', 'no-cache');
+    },
+  }));
 
   const auth = createAuth(password);
   const authState = (req) => {
