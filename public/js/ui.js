@@ -19,6 +19,7 @@ export const icons = {
   file: svg('<path d="M14 3H6v18h12V7l-4-4z"/><path d="M14 3v4h4"/>'),
   edit: svg('<path d="M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4"/>'),
   qr: svg('<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2"/>'),
+  truck: svg('<path d="M3 6h11v10H3zM14 9h4l3 3v4h-7"/><circle cx="7" cy="17.5" r="1.5"/><circle cx="17" cy="17.5" r="1.5"/>'),
   cart: svg('<path d="M3 4h2l2.4 11h10.2L20 7H6.2"/><circle cx="9" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/>'),
 };
 
@@ -259,4 +260,15 @@ export function combobox(input, { options, onPick = () => {}, newLabel = (v) => 
     }, 120);
   });
   return { open, close };
+}
+
+// Datum yyyy-mm-dd in der Zeitzone des Geräts
+export const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+export const dateDe = (iso) => (iso ? new Date(iso).toLocaleDateString('de-DE') : '');
+export const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+// "1.234,50 €" oder "3,5" -> Zahl
+export const parseNum = (v) => Number(String(v).replace(/\s|€/g, '').replace(',', '.'));
+
+export function tile(label, value, hint = '') {
+  return `<div class="stat"><span class="label">${label}</span><span class="value">${value}</span>${hint ? `<span class="hint">${hint}</span>` : ''}</div>`;
 }

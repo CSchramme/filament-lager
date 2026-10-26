@@ -1,434 +1,46 @@
-// Reiter "Drucke": offener Beleg, Angebote, erstellte Belege mit Umsatz und Gewinn,
-// Stromabrechnung für den, der den Strom zahlt, und der Druckverlauf aus der
-// Bambu Cloud mit Kosten je Druck.
+// Reiter "Drucke": Stromabrechnung für den, der den Strom zahlt, und der
+// Druckverlauf aus der Bambu Cloud mit Kosten je Druck. Von hier gehen Drucke
+// in den offenen Beleg oder auf Vorrat (Reiter "Verkauf").
 import {
-  jobQuote, offerStatus, openPower, priceQuote, salesSummary,
+  jobQuote, openPower, priceQuote,
 } from './domain.js';
 import { openJob } from './calculator.js';
-import { openPowerStatement, openReceipt } from './documents.js';
+import { openPowerStatement } from './documents.js';
+import { addPosition } from './sales.js';
+import { addStockDialog } from './stock.js';
 import {
-  addPosition, draftTotals, loadDraft, positionBreakdown, saleFromDraft, saveDraft,
-} from './sales.js';
-import { addStockDialog, editStockDialog, sellDialog } from './stock.js';
-import {
-  esc, fmtCt, fmtDuration, fmtEur, fmtNum, icons, openDialog, patchText, timeAgo, toast,
+  dateDe, esc, fmtCt, fmtDuration, fmtEur, fmtNum, localDay, openDialog, plural, tile, timeAgo, toast,
 } from './ui.js';
 
 const STATUS = { 2: ['ok', 'fertig'], 3: ['crit', 'abgebrochen'] };
 
 let ctx = null; // { root, app, go }
 let history = { connected: false, lastSync: '', tasks: [] };
-let sales = { sales: [], summary: salesSummary([]) };
+let sales = [];
 let payments = [];
-let offers = [];
-let stock = [];
 let powerSince = ''; // abweichender Beginn der offenen Stromabrechnung (yyyy-mm-dd)
 
-const num = (v) => Number(String(v).replace(/\s|€/g, '').replace(',', '.'));
-// Datum im Format yyyy-mm-dd in der Zeitzone des Geräts
-const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const today = () => localDay();
-const dateDe = (iso) => new Date(iso).toLocaleDateString('de-DE');
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 export async function renderPrints(root, app, { go }) {
   ctx = { root, app, go };
   root.innerHTML = `
-    <section class="panel" id="draft"></section>
-    <section class="panel" id="stock"></section>
-    <section class="panel" id="offers" hidden></section>
-    <section class="panel" id="sales"><div class="panel-head"><h2>Belege</h2></div><p class="small muted">Lädt …</p></section>
     <section class="panel" id="power"><div class="panel-head"><h2>Strom</h2></div><p class="small muted">Lädt …</p></section>
     <section class="panel" id="history"><div class="panel-head"><h2>Druckverlauf von Bambu</h2></div><p class="small muted">Lädt …</p></section>`;
-  root.querySelector('#draft').addEventListener('click', onDraftClick);
-  root.querySelector('#draft').addEventListener('input', onDraftInput);
-  root.querySelector('#draft').addEventListener('change', onDraftChange);
-  root.querySelector('#stock').addEventListener('click', onStockClick);
-  root.querySelector('#offers').addEventListener('click', onOffersClick);
-  root.querySelector('#sales').addEventListener('click', onSalesClick);
   root.querySelector('#power').addEventListener('click', onPowerClick);
   root.querySelector('#power').addEventListener('change', onPowerChange);
   root.querySelector('#history').addEventListener('click', onHistoryClick);
-  updateDraft();
   try {
     let power;
-    let offerList;
-    let stockList;
-    [history, sales, power, offerList, stockList] = await Promise.all([
-      app.backend.tasks(), app.backend.sales(), app.backend.powerPayments(), app.backend.offers(), app.backend.stock(),
-    ]);
+    let s;
+    [history, s, power] = await Promise.all([app.backend.tasks(), app.backend.sales(), app.backend.powerPayments()]);
+    sales = s.sales;
     payments = power.payments;
-    offers = offerList.offers;
-    stock = stockList.stock;
   } catch (err) {
     toast(err.message, 'error');
   }
-  updateStock();
-  updateOffers();
-  updateSales();
   updatePower();
   updateHistory();
-}
-
-// Verkaufs- und Angebotsantworten bringen den Vorrat mit.
-function takeSales(res) {
-  sales = { sales: res.sales, summary: res.summary };
-  if (res.stock) stock = res.stock;
-  updateStock();
-}
-
-function tile(label, value, hint = '') {
-  return `<div class="stat"><span class="label">${label}</span><span class="value">${value}</span>${hint ? `<span class="hint">${hint}</span>` : ''}</div>`;
-}
-
-// ---------------------------------------------------------------------------
-// Offener Beleg
-
-function splitText(b) {
-  const costs = [['Filament', b.filament], ['Strom', b.energy], ['Drucker', b.machine], ['Fehldrucke', b.failure], ['Arbeit', b.labor]]
-    .filter(([, v]) => v).map(([l, v]) => `${l} ${fmtEur(v)}`).join(' + ');
-  return `${costs} = Kosten ${fmtEur(b.cost)}, dazu Gewinn ${fmtEur(b.profit)}`;
-}
-
-function draftHtml() {
-  const draft = loadDraft();
-  const { settings } = ctx.app;
-  const head = `<div class="panel-head"><h2>Offener Beleg</h2><p>Teile aus dem Rechner oder dem Druckverlauf sammeln, dann den Beleg erstellen</p></div>`;
-  if (!draft.positions.length) {
-    return `${head}<p class="muted">Noch leer. Im Rechner oder unten im Druckverlauf auf „Zum Beleg“ tippen.</p>
-      <div class="actions"><button class="btn small" type="button" data-draft="manual">Position von Hand</button></div>`;
-  }
-  const t = draftTotals(draft, settings);
-  const rows = t.lines.map((p) => {
-    const b = p.breakdown;
-    const auto = p.manual ? null : positionBreakdown({ ...p, piecePrice: null }, settings).piece;
-    const left = p.stockId ? (stock.find((x) => x.id === p.stockId) || { onHand: 0 }).onHand : null;
-    const meta = [
-      left !== null ? `<span class="${left < p.qty ? 'neg' : ''}">aus dem Vorrat, noch ${left}</span>` : '',
-      p.colorName || p.material ? `${p.colorHex ? `<span class="dot-color" style="background:${esc(p.colorHex)}"></span>` : ''}${esc([p.material, p.colorName].filter(Boolean).join(' '))}${p.spoolNr ? ` #${p.spoolNr}` : ''}` : '',
-      p.grams ? `${fmtNum(p.grams)} g` : '',
-      p.seconds ? fmtDuration(p.seconds) : '',
-    ].filter(Boolean).join(' · ');
-    return `<div class="draft-row" data-id="${esc(p.id)}">
-      <div class="draft-title"><strong>${esc(p.title)}</strong>${meta ? `<span class="small muted">${meta} pro Stück</span>` : ''}
-        <span class="small muted" data-k="split-${esc(p.id)}">${p.manual ? 'von Hand' : splitText(b)}</span></div>
-      <label class="draft-field"><span>Anzahl</span><input type="number" min="1" step="1" inputmode="numeric" data-field="qty" value="${p.qty}"></label>
-      <label class="draft-field"><span>pro Stück</span><input inputmode="decimal" data-field="piecePrice" value="${p.piecePrice === null ? '' : p.piecePrice.toFixed(2).replace('.', ',')}" placeholder="${auto === null ? '' : auto.toFixed(2).replace('.', ',')}" aria-label="Preis pro Stück in Euro"></label>
-      <span class="num draft-sum" data-k="sum-${esc(p.id)}">${fmtEur(b.piece * p.qty)}</span>
-      <button type="button" class="icon-btn" data-draft="remove" aria-label="Position entfernen">×</button>
-    </div>`;
-  }).join('');
-  return `${head}
-    <div class="draft-list">${rows}</div>
-    <div class="calc-line" data-row="min" ${t.minExtra > 0 ? '' : 'hidden'}><span>Aufschlag auf den Mindestpreis von ${fmtEur(settings.minPrice)}</span><span class="num" data-k="min">${fmtEur(t.minExtra)}</span></div>
-    <div class="calc-total"><span>Summe</span><strong class="num" data-k="total">${fmtEur(t.total)}</strong></div>
-    <p class="small muted">Preis pro Stück leer lassen für den berechneten Preis. Ein eigener Preis ändert nur den Gewinn.</p>
-    <div class="fields">
-      <label class="field"><span>Datum</span><input type="date" data-meta="date" value="${esc(draft.date || today())}"></label>
-      <label class="field"><span>Kunde (optional)</span><input data-meta="customer" value="${esc(draft.customer || '')}" placeholder="Name"></label>
-      <label class="field full"><span>Notiz auf dem Beleg (optional)</span><input data-meta="note" value="${esc(draft.note || '')}" placeholder="z. B. bar bezahlt"></label>
-    </div>
-    <div class="actions">
-      <button class="btn primary" type="button" data-draft="create">Beleg erstellen</button>
-      <button class="btn" type="button" data-draft="offer">Als Angebot speichern</button>
-      <button class="btn" type="button" data-draft="manual">Position von Hand</button>
-      <span class="spacer"></span>
-      <button class="btn ghost" type="button" data-draft="clear">Leeren</button>
-    </div>`;
-}
-
-function updateDraft(full = true) {
-  const el = ctx.root.querySelector('#draft');
-  if (full) el.innerHTML = draftHtml();
-  else patchText(el, draftHtml());
-}
-
-function editDraft(fn) {
-  const draft = loadDraft();
-  fn(draft);
-  saveDraft(draft);
-  return draft;
-}
-
-function onDraftInput(e) {
-  const row = e.target.closest('.draft-row');
-  const meta = e.target.dataset.meta;
-  if (meta) {
-    editDraft((d) => { d[meta] = e.target.value; });
-    return;
-  }
-  if (!row) return;
-  const field = e.target.dataset.field;
-  editDraft((d) => {
-    const p = d.positions.find((x) => x.id === row.dataset.id);
-    if (!p) return;
-    if (field === 'qty') p.qty = Math.max(1, Math.round(num(e.target.value)) || 1);
-    if (field === 'piecePrice') {
-      const v = num(e.target.value);
-      p.piecePrice = e.target.value.trim() === '' || !Number.isFinite(v) ? null : Math.max(0, v);
-    }
-  });
-  updateDraft(false);
-}
-
-// Nach dem Verlassen eines Feldes ganz neu zeichnen (Platzhalter, Aufteilung).
-function onDraftChange(e) {
-  if (e.target.dataset.field) {
-    updateDraft();
-    updateStock();
-  }
-}
-
-async function onDraftClick(e) {
-  const b = e.target.closest('[data-draft]');
-  if (!b) return;
-  const action = b.dataset.draft;
-  if (action === 'remove') {
-    const id = b.closest('.draft-row').dataset.id;
-    editDraft((d) => { d.positions = d.positions.filter((p) => p.id !== id); });
-    updateDraft();
-    updateStock();
-  }
-  if (action === 'clear') {
-    saveDraft({ positions: [], customer: '', note: '' });
-    updateDraft();
-    updateStock();
-  }
-  if (action === 'manual') manualDialog();
-  if (action === 'create') await createReceipt(b);
-  if (action === 'offer') await createOffer(b);
-}
-
-function manualDialog() {
-  openDialog({
-    title: 'Position von Hand',
-    body: `<div class="fields">
-      <label class="field full"><span>Bezeichnung</span><input name="title" required placeholder="z. B. Versand oder Sonderwunsch"></label>
-      <label class="field"><span>Anzahl</span><input name="qty" type="number" min="1" step="1" value="1"></label>
-      <label class="field"><span>Preis pro Stück (€)</span><input name="price" inputmode="decimal" required></label>
-      <label class="field full"><span>Eigene Kosten pro Stück (€, optional)</span><input name="cost" inputmode="decimal" placeholder="0"></label>
-    </div>`,
-    foot: '<button type="button" class="btn" data-close>Abbrechen</button><span class="spacer"></span><button type="submit" class="btn primary">Hinzufügen</button>',
-    async onSubmit(form) {
-      const f = form.elements;
-      const price = num(f.price.value);
-      if (!f.title.value.trim()) throw new Error('Bitte eine Bezeichnung eingeben.');
-      if (!f.price.value.trim() || !Number.isFinite(price) || price < 0) throw new Error('Bitte einen Preis in Euro eingeben, z. B. 4,50.');
-      addPosition({
-        title: f.title.value.trim(), qty: Math.max(1, Math.round(num(f.qty.value)) || 1), manual: true, piecePrice: price, pieceCost: Math.max(0, num(f.cost.value) || 0),
-      });
-      updateDraft();
-    },
-  });
-}
-
-async function createReceipt(btn) {
-  const draft = loadDraft();
-  const { settings } = ctx.app;
-  btn.disabled = true;
-  try {
-    const res = await ctx.app.backend.addSale(saleFromDraft(draft, settings, {
-      date: draft.date || today(), customer: draft.customer || '', note: draft.note || '',
-    }));
-    saveDraft({ positions: [], customer: '', note: '' });
-    takeSales(res);
-    updateDraft();
-    updateSales();
-    updatePower();
-    toast(`Beleg ${res.sale.nr} erstellt`);
-    openReceipt(res.sale, settings);
-  } catch (err) {
-    toast(err.message, 'error');
-    btn.disabled = false;
-  }
-}
-
-// Angebot statt Beleg: bekommt eine eigene Nummer und gilt eine Zeit lang.
-async function createOffer(btn) {
-  const draft = loadDraft();
-  const { settings } = ctx.app;
-  btn.disabled = true;
-  try {
-    const res = await ctx.app.backend.addOffer(saleFromDraft(draft, settings, {
-      date: draft.date || today(), customer: draft.customer || '', note: draft.note || '',
-    }));
-    offers = res.offers;
-    saveDraft({ positions: [], customer: '', note: '' });
-    updateDraft();
-    updateOffers();
-    toast(`Angebot ${res.offer.nr} gespeichert`);
-    openReceipt(res.offer, settings, { offer: true });
-  } catch (err) {
-    toast(err.message, 'error');
-    btn.disabled = false;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Vorrat
-
-function updateStock() {
-  const el = ctx.root.querySelector('#stock');
-  const draft = loadDraft();
-  const inDraft = (id) => draft.positions.filter((p) => p.stockId === id).reduce((a, p) => a + p.qty, 0);
-  const list = [...stock].sort((a, b) => Number(b.onHand > 0) - Number(a.onHand > 0) || a.title.localeCompare(b.title, 'de'));
-  const pieces = stock.reduce((a, x) => a + x.onHand, 0);
-  const value = stock.reduce((a, x) => a + x.onHand * x.price, 0);
-  el.innerHTML = `<div class="panel-head"><h2>Vorrat</h2><p>${pieces ? `${pieces} ${pieces === 1 ? 'Teil' : 'Teile'}, Verkaufswert ${fmtEur(value)}` : 'auf Vorrat gedruckt, einzeln verkaufen'}</p></div>
-    ${list.length ? `<div class="stock-list">${list.map((x) => {
-    const reserved = inDraft(x.id);
-    const profit = x.price - x.parts.cost;
-    return `<div class="stock-row${x.onHand ? '' : ' sold-out'}" data-id="${esc(x.id)}">
-        <div class="stock-title"><strong>${esc(x.title)}</strong>
-          <span class="small muted">${x.colorHex ? `<span class="dot-color" style="background:${esc(x.colorHex)}"></span>` : ''}${esc([x.material, x.colorName].filter(Boolean).join(' '))}${x.material || x.colorName ? ' · ' : ''}Selbstkosten ${fmtEur(x.parts.cost)}, Gewinn <span class="${profit < 0 ? 'neg' : ''}">${fmtEur(profit)}</span> pro Stück</span></div>
-        <div class="stock-count"><strong class="num">${x.onHand}</strong><span class="small muted">${x.onHand ? `von ${x.made}` : 'ausverkauft'}${reserved ? ` · ${reserved} im Beleg` : ''}</span></div>
-        <span class="num stock-price">${fmtEur(x.price)}</span>
-        <span class="stock-actions"><button type="button" class="btn small primary" data-stock="sell" ${x.onHand ? '' : 'disabled'}>Verkaufen</button>
-          <button type="button" class="icon-btn" data-stock="edit" aria-label="${esc(x.title)} ändern">${icons.edit}</button></span>
-      </div>`;
-  }).join('')}</div>` : `<p class="muted">Mehrere gleiche Teile auf einmal gedruckt, z. B. 25 Kürbisse? Leg sie auf Vorrat: im Rechner die Anzahl eintragen und „Auf Vorrat legen“,
-      oder unten im Druckverlauf bei einem Druck „Auf Vorrat“. Dann verkaufst du sie einzeln, der Vorrat zählt mit, und die Arbeit ist auf alle Teile verteilt.</p>`}`;
-}
-
-function onStockClick(e) {
-  const b = e.target.closest('[data-stock]');
-  if (!b) return;
-  const item = stock.find((x) => x.id === b.closest('.stock-row').dataset.id);
-  if (!item) return;
-  if (b.dataset.stock === 'sell') {
-    sellDialog(ctx.app, item, {
-      onSold(res) {
-        takeSales(res);
-        updateSales();
-        updatePower();
-      },
-      onDraft() {
-        updateDraft();
-        updateStock();
-      },
-    });
-  }
-  if (b.dataset.stock === 'edit') {
-    editStockDialog(ctx.app, item, {
-      onDone(res) {
-        stock = res.stock;
-        updateStock();
-      },
-    });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Angebote
-
-const OFFER_STATUS = {
-  offen: (o) => `<span class="pill">gilt bis ${dateDe(o.validUntil)}</span>`,
-  abgelaufen: (o) => `<span class="pill knapp">abgelaufen ${dateDe(o.validUntil)}</span>`,
-  angenommen: (o) => `<span class="pill new">Beleg ${esc(o.saleNr)}</span>`,
-};
-
-function updateOffers() {
-  const el = ctx.root.querySelector('#offers');
-  el.hidden = !offers.length;
-  if (!offers.length) return;
-  const open = offers.filter((o) => offerStatus(o, today()) === 'offen');
-  el.innerHTML = `<div class="panel-head"><h2>Angebote</h2><p>${open.length ? `${plural(open.length, 'offenes', 'offene')} über ${fmtEur(open.reduce((a, o) => a + o.price, 0))}` : 'keine offenen'}</p></div>
-    <div class="sale-list">${offers.slice(0, 50).map((o) => {
-    const status = offerStatus(o, today());
-    return `<div class="sale-row offer-row">
-        <span class="num small muted sale-nr"><span>${esc(o.nr)}</span><span>${dateDe(o.date)}</span></span>
-        <button type="button" class="sale-title" data-offer="open" data-id="${esc(o.id)}"><strong>${esc(o.title)}</strong>${o.qty > 1 ? ` <span class="muted">× ${o.qty}</span>` : ''}${o.customer ? `<span class="small muted"> · ${esc(o.customer.split('\n')[0])}</span>` : ''}</button>
-        <span class="num">${fmtEur(o.price)}</span>
-        <span class="offer-state">${OFFER_STATUS[status](o)}${status === 'angenommen' ? '' : ` <button type="button" class="btn small primary" data-offer="accept" data-id="${esc(o.id)}">Beleg</button>`}</span>
-        <button type="button" class="icon-btn" data-offer="delete" data-id="${esc(o.id)}" aria-label="Angebot löschen">×</button>
-      </div>`;
-  }).join('')}</div>
-    <p class="small muted">„Beleg“ macht aus dem Angebot mit einem Klick einen Beleg mit denselben Preisen.</p>`;
-}
-
-async function onOffersClick(e) {
-  const b = e.target.closest('[data-offer]');
-  if (!b) return;
-  const offer = offers.find((o) => o.id === b.dataset.id);
-  if (!offer) return;
-  const { settings } = ctx.app;
-  if (b.dataset.offer === 'open') openReceipt(offer, settings, { offer: true });
-  if (b.dataset.offer === 'accept') {
-    b.disabled = true;
-    try {
-      const res = await ctx.app.backend.acceptOffer(offer.id);
-      offers = res.offers;
-      takeSales(res);
-      updateOffers();
-      updateSales();
-      updatePower();
-      toast(`Beleg ${res.sale.nr} aus Angebot ${offer.nr} erstellt`);
-      openReceipt(res.sale, settings);
-    } catch (err) {
-      toast(err.message, 'error');
-      b.disabled = false;
-    }
-  }
-  if (b.dataset.offer === 'delete') {
-    openDialog({
-      title: 'Angebot löschen?',
-      body: `<p>Angebot ${esc(offer.nr)} über ${fmtEur(offer.price)} wird gelöscht.${offer.saleNr ? ` Beleg ${esc(offer.saleNr)} bleibt erhalten.` : ''}</p>`,
-      foot: '<button type="button" class="btn" data-close>Abbrechen</button><span class="spacer"></span><button type="submit" class="btn danger solid">Löschen</button>',
-      async onSubmit() {
-        offers = (await ctx.app.backend.deleteOffer(offer.id)).offers;
-        updateOffers();
-        toast('Angebot gelöscht');
-      },
-    });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Belege
-
-function updateSales() {
-  const el = ctx.root.querySelector('#sales');
-  const { summary } = sales;
-  const m = summary.month;
-  const t = summary.total;
-  const monthName = new Date().toLocaleDateString('de-DE', { month: 'long' });
-  el.innerHTML = `<div class="panel-head"><h2>Belege</h2><p>Antippen öffnet den Beleg zum Drucken oder als PDF</p></div>
-    <div class="stats sales-stats">
-      ${tile(`Umsatz im ${esc(monthName)}`, fmtEur(m.revenue), `${m.pieces} Stück`)}
-      ${tile(`Gewinn im ${esc(monthName)}`, fmtEur(m.profit), `Kosten ${fmtEur(m.cost)}`)}
-      ${tile('Umsatz gesamt', fmtEur(t.revenue), `${plural(t.count, 'Beleg', 'Belege')}, ${t.pieces} Stück`)}
-      ${tile('Gewinn gesamt', fmtEur(t.profit), `Kosten ${fmtEur(t.cost)}`)}
-    </div>
-    ${sales.sales.length ? `<div class="sale-list">${sales.sales.slice(0, 50).map((s) => `
-      <div class="sale-row">
-        <span class="num small muted sale-nr"><span>${esc(s.nr)}</span><span>${dateDe(s.date)}</span></span>
-        <button type="button" class="sale-title" data-sales="open" data-id="${esc(s.id)}"><strong>${esc(s.title)}</strong>${s.qty > 1 ? ` <span class="muted">× ${s.qty}</span>` : ''}${s.customer ? `<span class="small muted"> · ${esc(s.customer.split('\n')[0])}</span>` : ''}</button>
-        <span class="num">${fmtEur(s.price)}</span>
-        <span class="num small ${s.price - s.cost >= 0 ? 'muted' : 'neg'}" title="Gewinn">${s.price - s.cost >= 0 ? '+' : ''}${fmtEur(s.price - s.cost)}</span>
-        <button type="button" class="icon-btn" data-sales="delete" data-id="${esc(s.id)}" aria-label="Beleg löschen">×</button>
-      </div>`).join('')}</div>`
-    : '<p class="small muted">Noch keine Belege.</p>'}`;
-}
-
-function onSalesClick(e) {
-  const b = e.target.closest('[data-sales]');
-  if (!b) return;
-  const sale = sales.sales.find((s) => s.id === b.dataset.id);
-  if (!sale) return;
-  if (b.dataset.sales === 'open') openReceipt(sale, ctx.app.settings);
-  if (b.dataset.sales === 'delete') {
-    openDialog({
-      title: 'Beleg löschen?',
-      body: `<p>Beleg ${esc(sale.nr)} vom ${dateDe(sale.date)} über ${fmtEur(sale.price)} wird gelöscht. Die Nummer wird nicht neu vergeben.</p>`,
-      foot: '<button type="button" class="btn" data-close>Abbrechen</button><span class="spacer"></span><button type="submit" class="btn danger solid">Löschen</button>',
-      async onSubmit() {
-        takeSales(await ctx.app.backend.deleteSale(sale.id));
-        updateSales();
-        updatePower();
-        toast(sale.items.some((i) => i.stockId) ? 'Beleg gelöscht, die Teile sind wieder im Vorrat' : 'Beleg gelöscht');
-      },
-    });
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -436,7 +48,7 @@ function onSalesClick(e) {
 
 function currentPower() {
   return openPower({
-    tasks: history.tasks, sales: sales.sales, payments, settings: ctx.app.settings, since: powerSince ? new Date(powerSince + 'T00:00:00').toISOString() : '',
+    tasks: history.tasks, sales, payments, settings: ctx.app.settings, since: powerSince ? new Date(powerSince + 'T00:00:00').toISOString() : '',
   });
 }
 
@@ -607,10 +219,8 @@ async function onHistoryClick(e) {
       quoteFor: (n) => priceQuote({
         grams: q.grams / n, perGram: q.perGram, seconds: q.seconds / n, qty: n,
       }, ctx.app.settings),
-      onDone(res) {
-        stock = res.stock;
-        updateStock();
-        ctx.root.querySelector('#stock').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      onDone() {
+        toast('Im Reiter „Verkauf“ unter „Vorrat“ zu finden');
       },
     });
   }
@@ -650,10 +260,7 @@ function addTaskDialog(task) {
       const draft = addPosition({
         title: task.title, qty: n, grams: q.grams / n, seconds: q.seconds / n, perGram: q.perGram, spool: main ? main.spool : null, taskId: task.id,
       });
-      updateDraft();
-      updateStock();
-      toast(`${n > 1 ? `${n} × ` : ''}„${task.title}“ zum Beleg hinzugefügt (${plural(draft.positions.length, 'Position', 'Positionen')})`);
-      ctx.root.querySelector('#draft').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      toast(`${n > 1 ? `${n} × ` : ''}„${task.title}“ im offenen Beleg (${plural(draft.positions.length, 'Position', 'Positionen')}), zu finden unter „Verkauf“`);
     },
   });
 }

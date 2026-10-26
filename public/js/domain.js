@@ -82,6 +82,11 @@ export function defaultSettings() {
     smallBusiness: false, // Hinweis § 19 UStG auf dem Beleg
     offerDays: 14, // so lange gilt ein Angebot
     defaultInfill: 15, // Infill in % für die Schätzung aus STL-Dateien
+    roundTo: 0.5, // Preis pro Teil aufrunden auf (0 = nicht runden)
+    discountQty: 10, // Mengenrabatt ab so vielen Teilen
+    discountPct: 10, // … in Prozent (0 = kein Rabatt)
+    // Versandarten als feste Position: Preis für den Kunden, eigene Kosten (Porto)
+    shipping: [{ name: 'DHL Päckchen', price: 4.5, cost: 4.19 }, { name: 'DHL Paket', price: 6.5, cost: 6.19 }],
     // Einkaufspreis je Filamentart, pro Rolle mit diesem Gewicht
     priceList: [{ material: 'PLA Basic', price: 19.99, weight: 1000 }],
     noRebuyWeights: [250], // Rollen mit diesem Kaufgewicht nicht nachkaufen
@@ -231,6 +236,12 @@ export function normalizeSettings(input) {
     smallBusiness: toBool(src.smallBusiness, base.smallBusiness),
     offerDays: Math.min(365, Math.max(1, toInt(src.offerDays, base.offerDays))),
     defaultInfill: Math.min(100, Math.max(0, toMoney(src.defaultInfill) ?? base.defaultInfill)),
+    roundTo: [0, 0.1, 0.5, 1].includes(toMoney(src.roundTo)) ? toMoney(src.roundTo) : base.roundTo,
+    discountQty: Math.max(0, toInt(src.discountQty, base.discountQty)),
+    discountPct: Math.min(90, Math.max(0, toMoney(src.discountPct) ?? base.discountPct)),
+    shipping: (Array.isArray(src.shipping) ? src.shipping : base.shipping)
+      .map((x) => ({ name: str(x && x.name), price: Math.max(0, toMoney(x && x.price) ?? 0), cost: Math.max(0, toMoney(x && x.cost) ?? 0) }))
+      .filter((x) => x.name),
     priceList: normalizePriceList(Array.isArray(src.priceList) ? src.priceList : base.priceList),
     noRebuyWeights: [...new Set((Array.isArray(src.noRebuyWeights) ? src.noRebuyWeights : base.noRebuyWeights)
       .map((w) => toInt(w, 0)).filter((w) => w > 0))].sort((a, b) => a - b),
@@ -464,8 +475,11 @@ const cents = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
 //   Fehldrucke = Zuschlag in % auf Filament + Strom
 //   Arbeit     = Arbeitszeit pro Auftrag × Stundenlohn, verteilt auf die Stückzahl
 //   Gewinn     = % auf die Selbstkosten
+//   Mengenrabatt ab discountQty Stück: discountPct % vom Preis, nie unter die Selbstkosten
+//   Aufrunden auf roundTo € (z. B. 0,50 €: 3,13 € -> 3,50 €)
 // Jeder Posten wird auf Cent gerundet, damit die Beträge aufgehen. Der
-// Mindestpreis gilt für den ganzen Auftrag (minTotal).
+// Mindestpreis gilt für den ganzen Auftrag (minTotal). "profit" ist der Gewinn
+// nach Rabatt und Rundung, "markup" der Aufschlag davor.
 export function priceQuote({ grams, perGram, seconds = 0, qty = 1 }, rates) {
   const hours = seconds / 3600;
   const filament = cents(grams * perGram);
@@ -475,15 +489,27 @@ export function priceQuote({ grams, perGram, seconds = 0, qty = 1 }, rates) {
   const laborOrder = cents((rates.laborMinutes / 60) * rates.laborRate);
   const labor = cents(laborOrder / qty);
   const cost = cents(filament + energy + machine + failure + labor);
-  const profit = cents(cost * (rates.profitPct / 100));
-  const piece = cents(cost + profit);
+  const markup = cents(cost * (rates.profitPct / 100));
+  const base = cents(cost + markup);
+  const discountPct = rates.discountPct > 0 && rates.discountQty > 0 && qty >= rates.discountQty ? rates.discountPct : 0;
+  const discount = discountPct ? Math.min(cents(base * (discountPct / 100)), Math.max(0, cents(base - cost))) : 0;
+  const reduced = cents(base - discount);
+  const piece = roundUp(reduced, rates.roundTo);
+  const rounding = cents(piece - reduced);
+  const profit = cents(piece - cost);
   const sum = cents(piece * qty);
   const total = Math.max(sum, cents(rates.minPrice || 0));
   return {
     grams, seconds, qty, hours, kwh: energyKwh(seconds, rates),
-    filament, energy, machine, failure, labor, laborOrder, cost, profit, piece,
+    filament, energy, machine, failure, labor, laborOrder, cost, markup, discountPct, discount, rounding, profit, piece,
     sum, total, minExtra: cents(total - sum), totalGrams: grams * qty,
   };
+}
+
+// Auf ein Vielfaches von step aufrunden (0 = nicht runden).
+export function roundUp(value, step) {
+  if (!(step > 0)) return cents(value);
+  return cents(Math.ceil(cents(value) / step - 1e-9) * step);
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +537,8 @@ export function normalizeSaleItem(input) {
     colorName: str(src.colorName),
     colorHex: normHex(src.colorHex),
     taskId: str(src.taskId),
+    kind: ['versand', 'hand'].includes(src.kind) ? src.kind : '', // Versand oder Position von Hand
+    discountPct: Math.max(0, toMoney(src.discountPct) ?? 0), // Mengenrabatt in %
     stockId: str(src.stockId), // aus dem Vorrat verkauft
     batchQty: Math.max(1, toInt(src.batchQty, qty)), // auf so viele Teile ist die Arbeit verteilt
     breakdown,
@@ -534,9 +562,11 @@ export function normalizeSale(input, { now = new Date().toISOString() } = {}) {
     id: str(src.id) || newId(),
     nr: str(src.nr), // Belegnummer, z. B. 2026-007
     date: str(src.date) || now.slice(0, 10),
-    customer: str(src.customer),
+    customer: String(src.customer ?? '').trim(), // Name und Adresse für den Beleg
+    customerId: str(src.customerId), // aus der Kundenliste
     note: str(src.note),
     items,
+    tracking: normalizeTracking(src.tracking), // Sendungsverfolgung
     minExtra, // Aufschlag auf den Mindestpreis
     fromOffer: str(src.fromOffer), // Nummer des Angebots, aus dem der Beleg entstand
     // Sätze beim Erstellen, damit der Beleg später gleich aussieht
@@ -547,10 +577,82 @@ export function normalizeSale(input, { now = new Date().toISOString() } = {}) {
       failPct: Math.max(0, toMoney(src.rates.failPct) ?? 0),
     } : null,
     title: items.length > 1 ? `${items[0].title} + ${items.length - 1} weitere` : items[0].title,
-    qty: items.reduce((a, i) => a + i.qty, 0),
+    qty: items.filter((i) => i.kind !== 'versand').reduce((a, i) => a + i.qty, 0), // Teile, ohne Versand
     price: cents(sumItems + minExtra),
     cost: cents(items.reduce((a, i) => a + i.cost, 0)),
     energy: cents(items.reduce((a, i) => a + i.energy, 0)),
+    createdAt: str(src.createdAt) || now,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Kunden
+
+export function normalizeCustomer(input, { now = new Date().toISOString() } = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  return {
+    id: str(src.id) || newId(),
+    name: str(src.name),
+    address: String(src.address ?? '').trim(), // mehrzeilig: Straße, PLZ Ort
+    email: str(src.email),
+    phone: str(src.phone),
+    note: str(src.note),
+    createdAt: str(src.createdAt) || now,
+  };
+}
+
+// Name und Adresse, wie sie auf dem Beleg unter "An" stehen.
+export function customerText(c) {
+  return [c.name, c.address].filter(Boolean).join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Sendungsverfolgung (DHL). Status von der DHL-Schnittstelle, sonst nur der Link.
+
+const TRACK_STATUS = {
+  'pre-transit': 'angekündigt', transit: 'unterwegs', delivered: 'zugestellt', failure: 'Problem', unknown: 'unbekannt',
+};
+
+export function normalizeTracking(input) {
+  const src = input && typeof input === 'object' ? input : null;
+  const number = src ? str(src.number).replace(/\s+/g, '').toUpperCase() : '';
+  if (!number) return null;
+  return {
+    carrier: 'dhl',
+    number,
+    status: Object.keys(TRACK_STATUS).includes(src.status) ? src.status : '',
+    statusText: str(src.statusText),
+    place: str(src.place),
+    updatedAt: str(src.updatedAt), // letzte Änderung laut DHL
+    checkedAt: str(src.checkedAt), // zuletzt bei DHL nachgefragt
+    deliveredAt: str(src.deliveredAt),
+    error: str(src.error),
+    events: (Array.isArray(src.events) ? src.events : []).slice(0, 20).map((e) => ({ time: str(e && e.time), text: str(e && e.text), place: str(e && e.place) })),
+  };
+}
+
+export const trackingLabel = (t) => (t && t.status ? TRACK_STATUS[t.status] : 'Sendungsnummer');
+
+export function trackingUrl(t) {
+  return `https://www.dhl.de/de/privatkunden/pakete-empfangen/verfolgen.html?piececode=${encodeURIComponent(t.number)}`;
+}
+
+// Gültige Sendungsnummer: Buchstaben und Ziffern, 8 bis 35 Zeichen
+export const validTrackingNumber = (n) => /^[A-Z0-9]{8,35}$/.test(str(n).replace(/\s+/g, '').toUpperCase());
+
+// ---------------------------------------------------------------------------
+// Eigene Ausgaben (Düsen, Platten, Versandmaterial …) für die Jahresübersicht
+
+export const EXPENSE_CATEGORIES = ['Filament', 'Ersatzteile', 'Werkzeug', 'Versandmaterial', 'Porto', 'Strom', 'Sonstiges'];
+
+export function normalizeExpense(input, { now = new Date().toISOString() } = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  return {
+    id: str(src.id) || newId(),
+    date: /^\d{4}-\d{2}-\d{2}$/.test(str(src.date)) ? str(src.date) : now.slice(0, 10),
+    title: str(src.title) || 'Ausgabe',
+    amount: Math.max(0, toMoney(src.amount) ?? 0),
+    category: EXPENSE_CATEGORIES.includes(src.category) ? src.category : 'Sonstiges',
     createdAt: str(src.createdAt) || now,
   };
 }
@@ -873,6 +975,7 @@ export function normalizeSpool(input, { base = null, now = new Date().toISOStrin
     inAms: toBool(src.inAms, false),
     note: str(src.note),
     price: (() => { const p = toMoney(src.price); return p !== null && p >= 0 ? p : null; })(), // Kaufpreis der Rolle in €
+    boughtAt: /^\d{4}-\d{2}-\d{2}$/.test(str(src.boughtAt)) ? str(src.boughtAt) : (str(src.createdAt) || now).slice(0, 10), // Kaufdatum
     bambu: normalizeBambu(src.bambu),
     createdAt: str(src.createdAt) || now,
     updatedAt: keepTimestamps && src.updatedAt ? str(src.updatedAt) : now,

@@ -2,10 +2,18 @@
 // alle Änderungen dorthin. Ohne Server (z. B. als statische Seite) speichert
 // das Lager im Browser; die Bambu-Anbindung ist dann nicht verfügbar.
 import {
-  applyPriceChanges, applyStockSale, assignNumbers, mergeStock, migratePriceList, newId, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
-  normalizeSettings, normalizeSpool, normalizeStockItem, placeList, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
+  applyPriceChanges, applyStockSale, assignNumbers, mergeStock, migratePriceList, newId, nextOfferNr, nextReceiptNr, normalizeCustomer,
+  normalizeExpense, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
+  planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
 } from './domain.js';
 import { seedSpools } from './seed.js';
+
+const needName = (c) => {
+  if (!c.name) throw new Error('Bitte einen Namen eingeben.');
+};
+const needAmount = (x) => {
+  if (!x.amount) throw new Error('Bitte einen Betrag eingeben.');
+};
 
 class ServerBackend {
   // auth: 'none' (kein Passwort), 'ok' (angemeldet), 'required' (Anmeldung nötig),
@@ -47,6 +55,14 @@ class ServerBackend {
   saveNotify(body) { return this.req('PUT', 'api/benachrichtigungen', body); }
   testNotify() { return this.req('POST', 'api/benachrichtigungen/test', {}); }
   applyPriceList(material, overwrite) { return this.req('POST', 'api/preisliste/uebernehmen', { material, overwrite }); }
+  customers() { return this.req('GET', 'api/kunden'); }
+  addCustomer(c) { return this.req('POST', 'api/kunden', c); }
+  updateCustomer(id, c) { return this.req('PUT', 'api/kunden/' + encodeURIComponent(id), c); }
+  deleteCustomer(id) { return this.req('DELETE', 'api/kunden/' + encodeURIComponent(id)); }
+  expenses() { return this.req('GET', 'api/ausgaben'); }
+  addExpense(x) { return this.req('POST', 'api/ausgaben', x); }
+  updateExpense(id, x) { return this.req('PUT', 'api/ausgaben/' + encodeURIComponent(id), x); }
+  deleteExpense(id) { return this.req('DELETE', 'api/ausgaben/' + encodeURIComponent(id)); }
   stock() { return this.req('GET', 'api/vorrat'); }
   addStock(item) { return this.req('POST', 'api/vorrat', item); }
   updateStock(id, patch) { return this.req('PUT', 'api/vorrat/' + encodeURIComponent(id), patch); }
@@ -131,6 +147,8 @@ class LocalBackend {
         offers: (Array.isArray(raw.offers) ? raw.offers : []).map((x) => normalizeOffer(x)),
         offerSeq: raw.offerSeq || {},
         stock: (Array.isArray(raw.stock) ? raw.stock : []).map((x) => normalizeStockItem(x, { now: x.updatedAt })),
+        customers: (Array.isArray(raw.customers) ? raw.customers : []).map((x) => normalizeCustomer(x)),
+        expenses: (Array.isArray(raw.expenses) ? raw.expenses : []).map((x) => normalizeExpense(x)),
       };
       // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
       for (const sale of [...data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(data, sale.date);
@@ -140,6 +158,7 @@ class LocalBackend {
     }
     const data = {
       settings: normalizeSettings(), spools: seedSpools(), nextNr: 1, sales: [], receiptSeq: {}, powerPayments: [], offers: [], offerSeq: {}, stock: [],
+      customers: [], expenses: [],
     };
     this.write(data);
     return data;
@@ -227,6 +246,54 @@ class LocalBackend {
     this.write(data);
     return { changed, spools: data.spools };
   }
+
+  // Listen wie auf dem Server (Kunden, Ausgaben)
+  listOf(key) {
+    return { [key]: this.load()[key] };
+  }
+
+  addTo(key, normalize, input, check) {
+    const data = this.load();
+    const item = normalize({ ...input, id: undefined, createdAt: undefined });
+    check(item);
+    data[key].unshift(item);
+    this.write(data);
+    return { item, [key]: data[key] };
+  }
+
+  updateIn(key, normalize, id, input, check) {
+    const data = this.load();
+    const idx = data[key].findIndex((x) => x.id === id);
+    if (idx < 0) throw new Error('Eintrag nicht gefunden.');
+    const item = normalize({ ...data[key][idx], ...input, id, createdAt: data[key][idx].createdAt });
+    check(item);
+    data[key][idx] = item;
+    this.write(data);
+    return { item, [key]: data[key] };
+  }
+
+  removeFrom(key, id) {
+    const data = this.load();
+    data[key] = data[key].filter((x) => x.id !== id);
+    this.write(data);
+    return { [key]: data[key] };
+  }
+
+  async customers() { return this.listOf('customers'); }
+
+  async addCustomer(c) { return this.addTo('customers', normalizeCustomer, c, needName); }
+
+  async updateCustomer(id, c) { return this.updateIn('customers', normalizeCustomer, id, c, needName); }
+
+  async deleteCustomer(id) { return this.removeFrom('customers', id); }
+
+  async expenses() { return this.listOf('expenses'); }
+
+  async addExpense(x) { return this.addTo('expenses', normalizeExpense, x, needAmount); }
+
+  async updateExpense(id, x) { return this.updateIn('expenses', normalizeExpense, id, x, needAmount); }
+
+  async deleteExpense(id) { return this.removeFrom('expenses', id); }
 
   async stock() {
     return { stock: this.load().stock };

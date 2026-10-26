@@ -622,6 +622,12 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
 /* Einstellungen */
 .types { display: grid; gap: 8px; }
 .type-row { display: grid; grid-template-columns: minmax(0, 1fr) 7.5em auto; gap: 8px; align-items: center; }
+[data-ship] { display: grid; gap: 8px; }
+.ship-row { display: grid; grid-template-columns: minmax(0, 1fr) 5.5em 5.5em auto; gap: 8px; align-items: center; }
+@media (max-width: 480px) { .ship-row { grid-template-columns: minmax(0, 1fr) 4.6em 4.6em auto; gap: 6px; } }
+.ship-options { display: grid; gap: 6px; margin-bottom: 12px; }
+.ship-options .switch span { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.ship-options .switch small { flex-basis: 100%; }
 
 /* Meldungen */
 .toasts {
@@ -637,9 +643,9 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
 .toast { background: var(--ink); color: var(--surface); padding: 10px 14px; border-radius: var(--radius-sm); box-shadow: var(--shadow); font-weight: 700; font-size: var(--step--1); }
 .toast.error { background: var(--crit); color: #fff; }
 
-/* Menü: bis 1080 px Breite (Handy, Tablet) stehen die Bereiche hinter einem Menü-Knopf */
+/* Menü: bis 1140 px Breite (Handy, Tablet) stehen die Bereiche hinter einem Menü-Knopf */
 .menu-btn { display: none; }
-@media (max-width: 1080px) {
+@media (max-width: 1140px) {
   .topbar .wrap { gap: 10px; padding-block: 8px; flex-wrap: nowrap; }
   .menu-btn {
     display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px;
@@ -789,4 +795,14 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
   .price-kg { align-self: end; padding-bottom: 8px; }
   .price-actions { grid-column: 1 / -1; justify-content: flex-end; }
   .price-actions:empty { display: none; }
+}
+
+/* Kunden */
+.customer-list { display: grid; margin-top: 8px; }
+.customer-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.customer-name { display: grid; gap: 2px; white-space: normal; }
+.customer-name .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 560px) {
+  .customer-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .customer-row > .num { grid-column: 1; }
 }

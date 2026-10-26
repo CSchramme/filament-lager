@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
 import {
-  applyPriceChanges, applyStockSale, colorNameFor, mergeStock, newId, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
+  applyPriceChanges, applyStockSale, colorNameFor, mergeStock, newId, normalizeCustomer, normalizeExpense, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
   normalizeSettings, normalizeSpool, normalizeStockItem, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
@@ -491,6 +491,40 @@ export function createApp({
     store.data.offers = store.data.offers.filter((x) => x.id !== req.params.id);
     await store.save();
     res.json(offersView());
+  });
+
+  // Listen mit Anlegen, Ändern und Löschen: Kunden und eigene Ausgaben.
+  function collectionRoutes(url, key, normalize, check = () => {}) {
+    const view = () => ({ [key]: store.data[key] });
+    app.get(`/api/${url}`, (req, res) => res.json(view()));
+    app.post(`/api/${url}`, async (req, res) => {
+      const item = normalize({ ...(req.body || {}), id: undefined, createdAt: undefined });
+      check(item);
+      store.data[key].unshift(item);
+      await store.save();
+      res.status(201).json({ item, ...view() });
+    });
+    app.put(`/api/${url}/:id`, async (req, res) => {
+      const idx = store.data[key].findIndex((x) => x.id === req.params.id);
+      if (idx < 0) throw new HttpError(404, 'Eintrag nicht gefunden.');
+      const old = store.data[key][idx];
+      const item = normalize({ ...old, ...(req.body || {}), id: old.id, createdAt: old.createdAt });
+      check(item);
+      store.data[key][idx] = item;
+      await store.save();
+      res.json({ item, ...view() });
+    });
+    app.delete(`/api/${url}/:id`, async (req, res) => {
+      store.data[key] = store.data[key].filter((x) => x.id !== req.params.id);
+      await store.save();
+      res.json(view());
+    });
+  }
+  collectionRoutes('kunden', 'customers', normalizeCustomer, (c) => {
+    if (!c.name) throw new HttpError(400, 'Bitte einen Namen eingeben.');
+  });
+  collectionRoutes('ausgaben', 'expenses', normalizeExpense, (x) => {
+    if (!x.amount) throw new HttpError(400, 'Bitte einen Betrag eingeben.');
   });
 
   // Preis aus der Preisliste bei den Rollen einer Filamentart eintragen.

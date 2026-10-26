@@ -11,7 +11,8 @@ import {
 } from '../public/js/sales.js';
 import { Store } from '../src/store.js';
 
-const settings = defaultSettings();
+// genaue Rechnung ohne Aufrunden und Mengenrabatt
+const settings = { ...defaultSettings(), roundTo: 0, discountPct: 0 };
 
 test('Beleg mit Positionen und Aufteilung pro Teil', () => {
   const sale = normalizeSale({
@@ -82,6 +83,28 @@ test('Offener Beleg: Positionen, eigener Preis und Mindestpreis', () => {
   assert.deepEqual(sale.items[0].breakdown, {
     filament: 0.1, energy: 0.01, machine: 0.05, failure: 0.01, labor: 1.25, cost: 1.42, profit: 1.08, piece: 2.5,
   });
+});
+
+test('Versand zählt nicht zum Mindestpreis, Sendungsnummer am Beleg', () => {
+  saveDraft({ positions: [], customer: '', note: '' });
+  addPosition({ title: 'Clip', qty: 1, grams: 5, seconds: 600, perGram: 0.02 });
+  addPosition({ title: 'Versand (DHL Päckchen)', qty: 1, manual: true, kind: 'versand', piecePrice: 4.5, pieceCost: 4.19 });
+  const draft = { ...loadDraft(), tracking: ' 0034 0434 1612 3456 7890 ' };
+  // Clip 1,85 € + Versand 4,50 €: der Mindestpreis von 3 € gilt nur für den Clip
+  const t = draftTotals(draft, settings);
+  assert.deepEqual([t.sum, t.minExtra, t.total], [6.35, 1.15, 7.5]);
+  const sale = normalizeSale(saleFromDraft(draft, settings, { date: '2026-10-25', customer: '', note: '' }));
+  assert.equal(sale.qty, 1); // Versand ist kein Teil
+  assert.equal(sale.items[1].kind, 'versand');
+  assert.equal(sale.price, 7.5);
+  assert.equal(sale.cost, 5.61); // 1,42 + 4,19 Porto
+  assert.equal(sale.tracking.number, '00340434161234567890');
+
+  // Nur Vorrat und Versand: kein Mindestpreis-Aufschlag
+  saveDraft({ positions: [], customer: '', note: '' });
+  addPosition({ stockItem: { id: 's1', title: 'Kürbis', price: 1.5, grams: 8, seconds: 900, parts: { filament: 0.16, energy: 0.01, machine: 0.08, failure: 0.02, labor: 0.05, cost: 0.32 }, batchQty: 25 }, qty: 1 });
+  addPosition({ title: 'Versand', qty: 1, manual: true, kind: 'versand', piecePrice: 4.5, pieceCost: 4.19 });
+  assert.equal(draftTotals(loadDraft(), settings).minExtra, 0);
 });
 
 test('Strom seit der letzten Abrechnung', () => {

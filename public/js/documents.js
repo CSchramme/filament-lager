@@ -1,6 +1,7 @@
 // Druckbare Dokumente: Beleg (mit Aufteilung des Preises pro Teil) und
 // Stromabrechnung. Sie öffnen sich in einem neuen Fenster; dort "Drucken"
 // wählen oder im Druckdialog "Als PDF sichern".
+import { trackingUrl } from './domain.js';
 import {
   esc, fmtCt, fmtDuration, fmtEur, fmtNum, toast,
 } from './ui.js';
@@ -69,7 +70,7 @@ function splitRows(item, rates) {
   const line = (label, note, v, cls = '') => `<tr class="split ${cls}"><td></td><td>${label}${note ? ` <span class="sub">${esc(note)}</span>` : ''}</td><td class="r"></td><td class="r">${fmtEur(v)}</td><td class="r">${fmtEur(v * item.qty)}</td></tr>`;
   return rows.map(([l, n, v], i) => line(l, n, v, i === 0 ? 'first' : '')).join('')
     + `<tr class="split"><td></td><td><em>Selbstkosten</em></td><td></td><td class="r">${fmtEur(b.cost)}</td><td class="r">${fmtEur(b.cost * item.qty)}</td></tr>`
-    + `<tr class="split"><td></td><td>Gewinn</td><td></td><td class="r">${fmtEur(b.profit)}</td><td class="r">${fmtEur(b.profit * item.qty)}</td></tr>`
+    + `<tr class="split"><td></td><td>Gewinn${item.discountPct ? ` <span class="sub">nach ${fmtNum(item.discountPct, 0)} % Mengenrabatt</span>` : ''}</td><td></td><td class="r">${fmtEur(b.profit)}</td><td class="r">${fmtEur(b.profit * item.qty)}</td></tr>`
     + `<tr class="split last sum"><td></td><td>Preis pro Teil</td><td></td><td class="r">${fmtEur(b.piece)}</td><td class="r">${fmtEur(b.piece * item.qty)}</td></tr>`;
 }
 
@@ -104,6 +105,7 @@ export function openReceipt(sale, settings, { offer = false } = {}) {
     <div class="foot">
       ${settings.smallBusiness ? '<div>Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.</div>' : ''}
       ${sale.note ? `<div>${esc(sale.note)}</div>` : ''}
+      ${!offer && sale.tracking ? `<div>Versand mit DHL, Sendungsnummer <strong>${esc(sale.tracking.number)}</strong>, verfolgen unter <a href="${esc(trackingUrl(sale.tracking))}">dhl.de</a></div>` : ''}
       <div>${offer ? `Das Angebot gilt bis ${date(sale.validUntil)}. Ich freue mich auf den Auftrag.` : 'Vielen Dank!'}</div>
     </div>`;
   openDocument(`${kind} ${sale.nr || ''}`, body);

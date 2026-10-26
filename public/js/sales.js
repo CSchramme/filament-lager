@@ -68,6 +68,7 @@ export function addPosition(position) {
     colorHex: s ? s.colorHex : '',
     taskId: position.taskId || '',
     manual: Boolean(position.manual),
+    kind: position.kind || (position.manual ? 'hand' : ''),
     piecePrice: position.piecePrice ?? null,
     pieceCost: position.pieceCost ?? 0,
   });
@@ -95,6 +96,7 @@ export function positionBreakdown(pos, settings) {
   const q = priceQuote({ grams: pos.grams, perGram: pos.perGram, seconds: pos.seconds, qty: pos.qty }, { ...settings, ...pos.overrides, minPrice: 0 });
   const b = {
     filament: q.filament, energy: q.energy, machine: q.machine, failure: q.failure, labor: q.labor, cost: q.cost, profit: q.profit, piece: q.piece,
+    discountPct: q.discountPct,
   };
   if (pos.piecePrice !== null && pos.piecePrice !== undefined) {
     b.piece = cents(pos.piecePrice);
@@ -107,9 +109,11 @@ export function draftTotals(draft, settings) {
   const cents = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
   const lines = draft.positions.map((p) => ({ ...p, breakdown: positionBreakdown(p, settings) }));
   const sum = cents(lines.reduce((a, p) => a + p.breakdown.piece * p.qty, 0));
-  // Der Mindestpreis gilt für Aufträge. Teile aus dem Vorrat haben einen festen Preis.
+  // Der Mindestpreis gilt für Aufträge. Teile aus dem Vorrat haben einen festen
+  // Preis, und Versandkosten zählen nicht zum Erreichen des Mindestpreises.
   const custom = lines.some((p) => !p.stockId && !p.manual);
-  const minExtra = custom ? Math.max(0, cents(settings.minPrice - sum)) : 0;
+  const goods = cents(lines.filter((p) => p.kind !== 'versand').reduce((a, p) => a + p.breakdown.piece * p.qty, 0));
+  const minExtra = custom ? Math.max(0, cents(settings.minPrice - goods)) : 0;
   return { lines, sum, minExtra, total: cents(sum + minExtra) };
 }
 
@@ -121,6 +125,7 @@ export function saleFromDraft(draft, settings, { date, customer, note }) {
     customer,
     note,
     minExtra,
+    tracking: draft.tracking ? { number: draft.tracking } : null,
     rates: {
       energyPrice: settings.energyPrice, printerWatts: settings.printerWatts, machineRate: settings.machineRate, failPct: settings.failPct,
     },
@@ -136,6 +141,8 @@ export function saleFromDraft(draft, settings, { date, customer, note }) {
       taskId: p.taskId,
       stockId: p.stockId || '',
       batchQty: p.batchQty || p.qty,
+      kind: p.kind || (p.manual ? 'hand' : ''),
+      discountPct: p.breakdown.discountPct || 0,
       breakdown: p.manual ? null : p.breakdown,
       price: p.breakdown.piece * p.qty,
       cost: p.breakdown.cost * p.qty,

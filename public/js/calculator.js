@@ -179,7 +179,7 @@ function bind() {
     if (b.dataset.calc === 'book') bookPrint();
     if (b.dataset.calc === 'add') addToReceipt();
     if (b.dataset.calc === 'stock') addToStock();
-    if (b.dataset.calc === 'receipt') ctx.go('drucke');
+    if (b.dataset.calc === 'receipt') ctx.go('verkauf');
     if (b.dataset.calc === 'save-price') savePrice();
   });
   result.addEventListener('input', (e) => {
@@ -399,7 +399,9 @@ function updateResult(full = true) {
     line('failure', `Fehldrucke <small class="muted">${fmtNum(rates.failPct, 0)} % auf Filament und Strom</small>`, q.failure),
     `<div class="calc-line"><span>Arbeit <input id="calc-labor" class="pct" inputmode="decimal" value="${decimal(rates.laborMinutes)}" aria-label="Arbeitszeit in Minuten"> Min. × ${fmtEur(rates.laborRate)}/Std.<small class="muted" data-row="labor-split" ${q.qty > 1 ? '' : 'hidden'}>, geteilt durch ${q.qty}</small></span><span class="num" data-k="labor">${fmtEur(q.labor)}</span></div>`,
     line('cost', 'Selbstkosten', q.cost, 'sum'),
-    `<div class="calc-line"><span>Gewinn <input id="calc-profit" class="pct" inputmode="decimal" value="${decimal(rates.profitPct)}" aria-label="Gewinn in Prozent"> %</span><span class="num" data-k="profit">${fmtEur(q.profit)}</span></div>`,
+    `<div class="calc-line"><span>Gewinn <input id="calc-profit" class="pct" inputmode="decimal" value="${decimal(rates.profitPct)}" aria-label="Gewinn in Prozent"> %</span><span class="num" data-k="profit">${fmtEur(q.markup)}</span></div>`,
+    `<div class="calc-line" data-row="discount" ${q.discount ? '' : 'hidden'}><span>Mengenrabatt <small class="muted">${fmtNum(rates.discountPct, 0)} % ab ${rates.discountQty} Stück</small></span><span class="num" data-k="discount">−${fmtEur(q.discount)}</span></div>`,
+    `<div class="calc-line" data-row="rounding" ${q.rounding ? '' : 'hidden'}><span>Aufgerundet <small class="muted">auf ${fmtEur(rates.roundTo)}</small></span><span class="num" data-k="rounding">+${fmtEur(q.rounding)}</span></div>`,
   ].join('');
   const need = q.totalGrams;
   let stock = '';
@@ -419,6 +421,7 @@ function updateResult(full = true) {
       <span class="copy-row"><input id="calc-spool-price" inputmode="decimal" placeholder="Kaufpreis in €" aria-label="Kaufpreis der Rolle in Euro"><button class="btn small" type="button" data-calc="save-price">Speichern</button></span></div>` : ''}
     <div class="calc-lines">${rows}</div>
     <div class="calc-total"><span>Preis pro Stück</span><strong class="num" data-k="piece">${fmtEur(q.piece)}</strong></div>
+    <p class="small muted calc-profit-note">Gewinn pro Stück <span data-k="final-profit">${fmtEur(q.profit)}</span>${rates.discountPct > 0 && q.qty < rates.discountQty ? ` · ab ${rates.discountQty} Stück ${fmtNum(rates.discountPct, 0)} % Mengenrabatt` : ''}</p>
     <div class="calc-line sum" data-row="sum" ${q.qty > 1 ? '' : 'hidden'}><span>${q.qty} Stück, ${fmtNum(need)} g</span><span class="num" data-k="sum">${fmtEur(q.sum)}</span></div>
     <div class="note" data-row="min" ${q.minExtra > 0 ? '' : 'hidden'}>Mindestpreis ${fmtEur(rates.minPrice)} pro Beleg: Allein auf einem Beleg kostet das <strong data-k="min-total">${fmtEur(q.total)}</strong>. Mit weiteren Teilen auf dem Beleg entfällt der Aufschlag.</div>
     ${stock}
@@ -488,7 +491,7 @@ function addToReceipt() {
     taskId: calc.job ? calc.job.id : '',
   });
   const { total } = draftTotals(draft, ctx.app.settings);
-  toast(`Zum Beleg hinzugefügt: ${draft.positions.length} ${draft.positions.length === 1 ? 'Position' : 'Positionen'}, ${fmtEur(total)}. Erstellen unter „Drucke“.`);
+  toast(`Zum Beleg hinzugefügt: ${draft.positions.length} ${draft.positions.length === 1 ? 'Position' : 'Positionen'}, ${fmtEur(total)}. Erstellen unter „Verkauf“.`);
   updateResult();
 }
 

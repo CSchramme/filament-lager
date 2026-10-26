@@ -1,11 +1,13 @@
 // Vorrat: Teile, die auf Vorrat gedruckt und einzeln verkauft werden
 // (z. B. 25 Kürbisse auf einer Platte). Dialoge zum Anlegen, Verkaufen und
 // Ändern; die Liste steht im Reiter "Drucke".
-import { stockFromQuote, stockSaleItem, weightPatch } from './domain.js';
+import {
+  customerText, stockFromQuote, stockSaleItem, weightPatch,
+} from './domain.js';
 import { openReceipt } from './documents.js';
 import { addPosition } from './sales.js';
 import {
-  esc, fmt, fmtEur, fmtNum, openDialog, toast,
+  combobox, esc, fmt, fmtEur, fmtNum, openDialog, toast,
 } from './ui.js';
 
 const num = (v) => Number(String(v).replace(/\s|€/g, '').replace(',', '.'));
@@ -73,7 +75,8 @@ export function addStockDialog(app, {
 }
 
 // Verkaufen: gleich als Beleg speichern oder in den offenen Beleg legen.
-export function sellDialog(app, item, { onSold, onDraft } = {}) {
+// customers: Kundenliste zur Auswahl; ein neuer Name wird als Kunde gespeichert.
+export function sellDialog(app, item, { onSold, onDraft, customers = [] } = {}) {
   openDialog({
     title: `${esc(item.title)} verkaufen`,
     body: `<p class="small muted">Noch ${item.onHand} Stück im Vorrat. Selbstkosten ${fmtEur(item.parts.cost)} pro Stück.</p>
@@ -81,7 +84,7 @@ export function sellDialog(app, item, { onSold, onDraft } = {}) {
         <label class="field"><span>Anzahl</span><input name="qty" type="number" min="1" max="${item.onHand}" step="1" inputmode="numeric" value="1"></label>
         <label class="field"><span>Preis pro Stück (€)</span><input name="price" inputmode="decimal" value="${dec(item.price)}"></label>
         <label class="field"><span>Datum</span><input name="date" type="date" value="${today()}"></label>
-        <label class="field"><span>Kunde (optional)</span><input name="customer"></label>
+        <label class="field"><span>Kunde (optional)</span><input name="customer" placeholder="Name suchen oder neu"></label>
       </div>
       <label class="switch"><input type="checkbox" name="show"><span>Beleg gleich zum Drucken öffnen</span></label>
       <p class="small muted" data-sum></p>`,
@@ -97,6 +100,10 @@ export function sellDialog(app, item, { onSold, onDraft } = {}) {
       f.qty.addEventListener('input', update);
       f.price.addEventListener('input', update);
       update();
+      combobox(f.customer, {
+        options: () => customers.map((c) => ({ value: c.name, hint: c.address.split('\n').pop() })),
+        newLabel: (v) => `„${v}“ als neuen Kunden`,
+      });
       dlg.querySelector('[data-draft]').addEventListener('click', () => {
         const n = Math.max(1, Math.round(num(f.qty.value)) || 1);
         addPosition({ stockItem: { ...item, price: Number.isFinite(num(f.price.value)) ? num(f.price.value) : item.price }, qty: n });
@@ -111,9 +118,13 @@ export function sellDialog(app, item, { onSold, onDraft } = {}) {
       const price = num(f.price.value);
       if (!Number.isFinite(price) || price < 0) throw new Error('Bitte einen Preis in Euro eingeben, z. B. 3,50.');
       if (n > item.onHand) throw new Error(`Es sind nur noch ${item.onHand} Stück im Vorrat.`);
+      const name = f.customer.value.trim();
+      let c = name && customers.find((x) => x.name.toLowerCase() === name.toLowerCase());
+      if (name && !c) c = (await app.backend.addCustomer({ name })).item;
       const res = await app.backend.addSale({
         date: f.date.value || today(),
-        customer: f.customer.value.trim(),
+        customer: c ? customerText(c) : '',
+        customerId: c ? c.id : '',
         items: [stockSaleItem(item, n, price)],
         minExtra: 0,
         rates: {

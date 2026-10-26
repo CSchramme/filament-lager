@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import zlib from 'node:zlib';
 import {
-  defaultSettings, densityOf, energyCost, estimateGrams, normalizeSpool, parseCsv, parseDuration, priceQuote, pricePerGram,
+  defaultSettings, densityOf, energyCost, estimateGrams, normalizeSpool, parseCsv, parseDuration, priceQuote, pricePerGram, roundUp,
   spoolsFromRows, toCsv,
 } from '../public/js/domain.js';
 import { parse3mf, parseModelFile, parseSliceInfo, parseStl } from '../public/js/model.js';
@@ -112,7 +112,7 @@ test('Gewicht schätzen und Preis mit allen Posten', () => {
   assert.equal(Math.round(estimateGrams({ volumeMm3: 8000, areaMm2: 2400 }) * 10) / 10, 3.6);
   assert.equal(estimateGrams({ volumeMm3: 8000, areaMm2: 2400 }, { infillPct: 100 }), 8000 / 1000 * 1.24);
 
-  const settings = defaultSettings();
+  const settings = { ...defaultSettings(), roundTo: 0, discountPct: 0 }; // genaue Rechnung, Rundung und Rabatt unten
   const spool = normalizeSpool({ purchaseWeight: 1000, price: '24,99' });
   assert.equal(pricePerGram(spool, settings), 0.02499);
   // Ohne eigenen Preis: Preisliste (PLA Basic 19,99 € pro kg), sonst Standardpreis 20 € pro kg
@@ -145,6 +145,27 @@ test('Gewicht schätzen und Preis mit allen Posten', () => {
     assert.equal(Math.round((q.cost + q.profit) * 100), Math.round(q.piece * 100));
   }
   assert.deepEqual(['1:24', '1,5', '90 min', '2h', '', 'bald'].map(parseDuration), [5040, 5400, 5400, 7200, null, null]);
+});
+
+test('Schöne Preise: aufrunden und Mengenrabatt', () => {
+  const settings = defaultSettings(); // aufrunden auf 0,50 €, ab 10 Stück 10 % Rabatt
+  assert.deepEqual([settings.roundTo, settings.discountQty, settings.discountPct], [0.5, 10, 10]);
+  // Kabelhalter: 3,13 € -> 3,50 €, der Gewinn steigt um die Rundung
+  const halter = priceQuote({ grams: 31.2, perGram: 0.02, seconds: 5040 }, settings);
+  assert.deepEqual([halter.cost, halter.markup, halter.rounding, halter.profit, halter.piece], [2.41, 0.72, 0.37, 1.09, 3.5]);
+  assert.deepEqual([3.13, 3.5, 3.51, 0.01, 0].map((v) => roundUp(v, 0.5)), [3.5, 3.5, 4, 0.5, 0]);
+  assert.deepEqual([roundUp(3.13, 0.1), roundUp(3.13, 1), roundUp(3.137, 0)], [3.2, 4, 3.14]);
+  // 10 Stück: 10 % Rabatt auf den Preis, dann aufrunden
+  const ten = priceQuote({ grams: 31.2, perGram: 0.02, seconds: 5040, qty: 10 }, settings);
+  assert.equal(ten.discountPct, 10);
+  assert.equal(ten.cost, 1.29); // Arbeit 0,13 pro Stück
+  // 1,29 + 0,39 = 1,68, minus 10 % (0,17) = 1,51, aufgerundet 2,00
+  assert.deepEqual([ten.markup, ten.discount, ten.piece, ten.profit, ten.sum], [0.39, 0.17, 2, 0.71, 20]);
+  // 9 Stück: kein Rabatt
+  assert.equal(priceQuote({ grams: 31.2, perGram: 0.02, seconds: 5040, qty: 9 }, settings).discount, 0);
+  // Rabatt nie unter die Selbstkosten
+  const deep = priceQuote({ grams: 10, perGram: 0.02, qty: 20 }, { ...settings, discountPct: 90, roundTo: 0 });
+  assert.equal(deep.piece, deep.cost);
 });
 
 test('Rollenpreis in der CSV', () => {

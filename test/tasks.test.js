@@ -31,7 +31,7 @@ test('Druck aus dem Bambu-Verlauf wird übersetzt', () => {
 });
 
 test('Kosten eines mehrfarbigen Drucks je Farbe', () => {
-  const settings = defaultSettings();
+  const settings = { ...defaultSettings(), roundTo: 0, discountPct: 0 }; // ohne Aufrunden und Rabatt
   const orange = normalizeSpool({ colorName: 'Orange', purchaseWeight: 1000, netWeight: 500, price: 25, inAms: true, bambu: { slot: 'A1' } });
   const orange2 = normalizeSpool({ colorName: 'Orange', purchaseWeight: 1000, netWeight: 900, price: 30 });
   const t = taskSummary(raw);

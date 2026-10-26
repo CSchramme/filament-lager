@@ -3,8 +3,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  assignNumbers, migratePriceList, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool,
-  normalizeStockItem, placeList,
+  assignNumbers, migratePriceList, nextReceiptNr, normalizeCustomer, normalizeExpense, normalizeOffer, normalizePowerPayment, normalizeSale,
+  normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import { normalizeNotify } from './notify.js';
@@ -62,13 +62,15 @@ export class Store {
       this.data.offerSeq = raw.offerSeq || {};
       this.data.notify = normalizeNotify(raw.notify);
       this.data.stock = (Array.isArray(raw.stock) ? raw.stock : []).map((x) => normalizeStockItem(x, { now: x.updatedAt }));
+      this.data.customers = (Array.isArray(raw.customers) ? raw.customers : []).map((x) => normalizeCustomer(x));
+      this.data.expenses = (Array.isArray(raw.expenses) ? raw.expenses : []).map((x) => normalizeExpense(x));
       assignNumbers(this.data);
       this.data.settings.places = placeList(this.data.settings, this.data.spools);
       if (migratePriceList(raw.settings, this.data)) await this.save();
     } else {
       this.data = {
         version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '', tasks: [], sales: [], receiptSeq: {}, powerPayments: [],
-        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [],
+        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [], customers: [], expenses: [],
       };
       await this.save();
     }

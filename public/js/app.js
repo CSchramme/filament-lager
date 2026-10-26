@@ -5,7 +5,7 @@ import {
   spoolPlace, spoolTypeOf, spoolsFromRows, stockLevel, summarize, toCsv, weightPatch,
 } from './domain.js';
 import {
-  combobox, download, esc, fmt, fmtEur, fmtKg, icons, openDialog, readFile, ring, timeAgo, toast,
+  combobox, download, esc, fmt, fmtEur, fmtKg, icons, openDialog, parseNum, readFile, ring, timeAgo, toast,
 } from './ui.js';
 import { renderAuswertung } from './auswertung.js';
 import { renderCalculator } from './calculator.js';
@@ -14,10 +14,11 @@ import { renderPreise } from './preise.js';
 import { renderPrints } from './prints.js';
 import { qrSvg } from './qr.js';
 import { openShoppingList } from './shopping.js';
+import { renderVerkauf } from './verkauf.js';
 
 // Bereiche der App, in dieser Reihenfolge als Reiter bzw. im Menü
 const VIEWS = [
-  ['lager', 'Lager'], ['plaetze', 'Plätze'], ['preise', 'Preisliste'], ['rechner', 'Rechner'], ['drucke', 'Drucke'],
+  ['lager', 'Lager'], ['plaetze', 'Plätze'], ['preise', 'Preisliste'], ['rechner', 'Rechner'], ['verkauf', 'Verkauf'], ['drucke', 'Drucke'],
   ['auswertung', 'Auswertung'], ['bambu', 'Bambu'], ['einstellungen', 'Einstellungen'],
 ];
 
@@ -208,6 +209,7 @@ function route() {
   else if (app.view === 'plaetze') renderPlaces();
   else if (app.view === 'preise') renderPreise($view, app);
   else if (app.view === 'rechner') renderCalculator($view, app, { spoolUpdated, go });
+  else if (app.view === 'verkauf') renderVerkauf($view, app, { go });
   else if (app.view === 'drucke') renderPrints($view, app, { go });
   else if (app.view === 'auswertung') renderAuswertung($view, app);
   else if (app.view === 'bambu') renderBambu();
@@ -1120,6 +1122,15 @@ function typeRow(t) {
 
 const dec = (v) => esc(String(v).replace('.', ','));
 
+function shipRow(x) {
+  return `<div class="ship-row">
+    <input name="shipName" value="${esc(x.name)}" aria-label="Versandart" placeholder="z. B. DHL Päckchen">
+    <input name="shipPrice" inputmode="decimal" value="${x.name ? x.price.toFixed(2).replace('.', ',') : ''}" aria-label="Preis für den Kunden in €" placeholder="Preis">
+    <input name="shipCost" inputmode="decimal" value="${x.name ? x.cost.toFixed(2).replace('.', ',') : ''}" aria-label="Porto, das du zahlst, in €" placeholder="Porto">
+    <button type="button" class="icon-btn" data-action="ship-remove" aria-label="Versandart entfernen">${icons.trash}</button>
+  </div>`;
+}
+
 function renderSettings() {
   const server = app.backend.mode === 'server';
   $view.innerHTML = `<section class="grid-2">
@@ -1142,7 +1153,15 @@ function renderSettings() {
           <label class="field"><span>Gewinn (% auf die Selbstkosten)</span><input name="profitPct" inputmode="decimal" value="${dec(app.settings.profitPct)}"></label>
           <label class="field"><span>Mindestpreis pro Beleg (€)</span><input name="minPrice" inputmode="decimal" value="${dec(app.settings.minPrice)}"></label>
           <label class="field"><span>Standard-Infill für die Schätzung (%)</span><input name="defaultInfill" inputmode="decimal" value="${dec(app.settings.defaultInfill)}"><small class="muted">für STL-Dateien ohne Gramm aus Bambu Studio, im Rechner änderbar</small></label>
+          <label class="field"><span>Preis pro Teil aufrunden auf</span><select name="roundTo">${[[0, 'nicht runden'], [0.1, '0,10 € (3,13 € → 3,20 €)'], [0.5, '0,50 € (3,13 € → 3,50 €)'], [1, '1,00 € (3,13 € → 4,00 €)']].map(([v, l]) => `<option value="${v}" ${v === app.settings.roundTo ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          <label class="field"><span>Mengenrabatt ab (Stück)</span><input name="discountQty" inputmode="numeric" value="${app.settings.discountQty}"><small class="muted">gleiche Teile in einer Position</small></label>
+          <label class="field"><span>Mengenrabatt (%)</span><input name="discountPct" inputmode="decimal" value="${dec(app.settings.discountPct)}"><small class="muted">0 = kein Rabatt, nie unter die Selbstkosten</small></label>
         </div>
+        <h3>Versandarten</h3>
+        <p class="small muted">Im Verkauf über „Versand“ als feste Position in den Beleg. Preis = was der Kunde zahlt, Porto = was du bezahlst. Versand zählt nicht zum Mindestpreis.</p>
+        <div class="ship-row small muted"><span>Name</span><span>Preis €</span><span>Porto €</span><span></span></div>
+        <div data-ship>${app.settings.shipping.map(shipRow).join('')}</div>
+        <div class="actions"><button type="button" class="btn small" data-action="ship-add">${icons.plus}Versandart</button></div>
         <h3>Beleg, Angebot und Strom</h3>
         <div class="fields">
           <label class="field"><span>Dein Name auf dem Beleg</span><input name="sellerName" value="${esc(app.settings.sellerName)}" autocomplete="name"></label>
@@ -1383,6 +1402,12 @@ const actions = {
     const inputs = document.querySelectorAll('[data-types] [name="typeName"]');
     inputs[inputs.length - 1].focus();
   },
+  'ship-add': () => {
+    document.querySelector('[data-ship]').insertAdjacentHTML('beforeend', shipRow({ name: '', price: 0, cost: 0 }));
+    const inputs = document.querySelectorAll('[data-ship] [name="shipName"]');
+    inputs[inputs.length - 1].focus();
+  },
+  'ship-remove': (el) => el.closest('.ship-row').remove(),
   'type-remove': (el) => {
     if (document.querySelectorAll('[data-types] .type-row').length <= 1) return toast('Mindestens eine Spulenart wird gebraucht.', 'error');
     el.closest('.type-row').remove();
@@ -1501,10 +1526,15 @@ const forms = {
       name: r.querySelector('[name="typeName"]').value,
       tare: r.querySelector('[name="typeTare"]').value,
     }));
+    const shipping = [...form.querySelectorAll('[data-ship] .ship-row')].map((r) => ({
+      name: r.querySelector('[name="shipName"]').value.trim(),
+      price: parseNum(r.querySelector('[name="shipPrice"]').value) || 0,
+      cost: parseNum(r.querySelector('[name="shipCost"]').value) || 0,
+    })).filter((x) => x.name);
     app.settings = await app.backend.saveSettings({
-      ...app.settings, spoolTypes, lowStockPart: f.lowStockPart.value, amsUnits: f.amsUnits.value,
+      ...app.settings, spoolTypes, shipping, lowStockPart: f.lowStockPart.value, amsUnits: f.amsUnits.value, roundTo: Number(f.roundTo.value),
       ...Object.fromEntries(['pricePerKg', 'energyPrice', 'printerWatts', 'machineRate', 'failPct', 'laborMinutes', 'laborRate', 'profitPct', 'minPrice',
-        'sellerName', 'powerPayee', 'sellerAddress', 'offerDays', 'defaultInfill'].map((k) => [k, f[k].value])),
+        'sellerName', 'powerPayee', 'sellerAddress', 'offerDays', 'defaultInfill', 'discountQty', 'discountPct'].map((k) => [k, f[k].value])),
       smallBusiness: f.smallBusiness.checked,
     });
     renderSettings();
