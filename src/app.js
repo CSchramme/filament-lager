@@ -6,7 +6,7 @@ import express from 'express';
 import {
   applyPriceChanges, applyStockSale, archiveSpool, colorNameFor, openPower, mergeStock, newId, normalizeCustomer, normalizeExpense, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
   normalizeSettings, normalizeSpool, normalizeStockItem, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
-  validTrackingNumber,
+  validTrackingNumber, ORDER_STEPS, advanceOrder, newToken, normalizeOrder, setOrderStatus, trackingUrl,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import {
@@ -142,6 +142,62 @@ export function createApp({
     });
   });
 
+  // Bestellstatus für den Kunden: bestellung.html#t=… schickt den Schlüssel der
+  // Bestellung im Header. Zeigt nur diese Bestellung, ohne Kosten und Adresse.
+  const LIVE = ['RUNNING', 'PREPARE', 'PAUSE'];
+  const findOrder = (token) => {
+    if (!token || token.length > 64) return null;
+    const h = (v) => crypto.createHash('sha256').update(String(v)).digest();
+    const want = h(token);
+    return store.data.sales.find((s) => s.order && s.order.token && crypto.timingSafeEqual(h(s.order.token), want)) || null;
+  };
+
+  function publicOrder(sale) {
+    const { settings } = store.data;
+    const o = sale.order;
+    const t = sale.tracking;
+    let live = null;
+    if (o.status === 'druck' && o.printJob && printers && typeof printers.status === 'function') {
+      const st = printers.status(o.printJob.printerId);
+      if (st && st.job === o.printJob.job && LIVE.includes(st.gcodeState)) {
+        live = {
+          state: st.gcodeState, progress: st.progress ?? null, remaining: st.remaining ?? null, layer: st.layer ?? null, layers: st.layers ?? null,
+        };
+      }
+    }
+    return {
+      nr: sale.nr,
+      date: sale.date,
+      seller: settings.sellerName,
+      contact: settings.sellerAddress,
+      customer: sale.customer.split('\n')[0].trim(),
+      items: sale.items.filter((i) => i.kind !== 'versand').map((i) => ({
+        title: i.title, qty: i.qty, material: i.material, colorName: i.colorName, colorHex: i.colorHex,
+      })),
+      price: sale.price,
+      order: {
+        status: o.status, delivery: o.delivery, history: o.history, expectedAt: o.expectedAt, note: o.note,
+      },
+      live,
+      tracking: t ? {
+        number: t.number, status: t.status, statusText: t.statusText, place: t.place, updatedAt: t.updatedAt, deliveredAt: t.deliveredAt, events: t.events, url: trackingUrl(t),
+      } : null,
+    };
+  }
+
+  app.get('/api/bestellung', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    let sale = findOrder(req.get('x-zugang'));
+    if (!sale) throw new HttpError(404, 'Diese Bestellung gibt es nicht oder der Link gilt nicht mehr. Bitte nach einem neuen Link fragen.');
+    // DHL-Stand auffrischen, wenn älter als 30 Minuten (höchstens 8 Sekunden warten)
+    const t = sale.tracking;
+    if (t && t.status !== 'delivered' && tracker.config.apiKey && Date.now() - (Date.parse(t.checkedAt) || 0) > 30 * 60 * 1000) {
+      await Promise.race([tracker.check(sale.id).catch(() => {}), new Promise((r) => { setTimeout(r, 8000).unref(); })]);
+      sale = store.data.sales.find((x) => x.id === sale.id) || sale;
+    }
+    res.json(publicOrder(sale));
+  });
+
   app.use('/api', (req, res, next) => {
     const state = authState(req);
     if (state === 'missing') {
@@ -205,6 +261,15 @@ export function createApp({
         notifier.printerUpdate(id, cfg ? cfg.name : '', st);
         const prev = lastState.get(id);
         lastState.set(id, st.gcodeState);
+        // Bestellungen, die mit diesem Druck verbunden sind, sind jetzt fertig
+        if (st.gcodeState === 'FINISH' && prev && prev !== 'FINISH') {
+          let changed = false;
+          for (const s of store.data.sales) {
+            const pj = s.order && s.order.status === 'druck' ? s.order.printJob : null;
+            if (pj && pj.printerId === id && pj.job === st.job) changed = advanceOrder(s.order, 'fertig') || changed;
+          }
+          if (changed) store.save().catch((err) => console.error('Speichern fehlgeschlagen:', err.message));
+        }
         // Druck fertig: Bambu trägt ihn nach kurzer Zeit in den Verlauf ein,
         // dann holen und abbuchen (zweiter Versuch, falls es länger dauert).
         if (st.gcodeState === 'FINISH' && prev && prev !== 'FINISH' && store.bambu.options.autoBook) {
@@ -567,9 +632,52 @@ export function createApp({
     if (number && !validTrackingNumber(number)) throw new HttpError(400, 'Die Sendungsnummer sieht nicht richtig aus: nur Buchstaben und Ziffern, 8 bis 35 Zeichen.');
     if (!number) sale.tracking = null;
     else if (!sale.tracking || sale.tracking.number !== number) sale.tracking = normalizeTracking({ number });
+    if (number) {
+      // Mit Sendungsnummer ist die Bestellung unterwegs
+      sale.order.delivery = 'versand';
+      advanceOrder(sale.order, 'versendet');
+    }
     await store.save();
     const fresh = number ? await tracker.check(sale.id) : sale;
     res.json({ sale: fresh, ...salesView() });
+  });
+
+  // Druck, der gerade läuft (für den Fortschritt auf der Kundenseite)
+  function runningJob() {
+    if (!printers || typeof printers.status !== 'function') return null;
+    for (const c of printerConfigs()) {
+      const st = printers.status(c.id);
+      if (st && st.job && LIVE.includes(st.gcodeState)) return { printerId: c.id, job: st.job };
+    }
+    return null;
+  }
+
+  // Bestellstatus ändern, Lieferart, voraussichtliches Datum, Hinweis für den
+  // Kunden, Link erstellen (link: 'neu') oder zurückziehen (link: 'weg').
+  app.put('/api/verkaeufe/:id/bestellung', async (req, res) => {
+    const sale = store.data.sales.find((x) => x.id === req.params.id);
+    if (!sale) throw new HttpError(404, 'Beleg nicht gefunden.');
+    const b = req.body || {};
+    const o = sale.order;
+    if (b.status !== undefined) {
+      if (b.status === '') Object.assign(o, { status: '', history: [], token: '', printJob: null });
+      else if (!ORDER_STEPS.includes(b.status)) throw new HttpError(400, 'Unbekannter Status.');
+      else {
+        setOrderStatus(o, b.status);
+        if (b.status === 'druck' && !o.printJob) o.printJob = runningJob();
+      }
+    }
+    if (b.delivery !== undefined) o.delivery = b.delivery;
+    if (b.expectedAt !== undefined) o.expectedAt = b.expectedAt;
+    if (b.note !== undefined) o.note = b.note;
+    if (b.link === 'neu') {
+      o.token = newToken();
+      if (!o.status) setOrderStatus(o, 'bestellt', sale.createdAt);
+    }
+    if (b.link === 'weg') o.token = '';
+    sale.order = normalizeOrder(o);
+    await store.save();
+    res.json({ sale, ...salesView() });
   });
 
   app.post('/api/verkaeufe/:id/sendung/pruefen', async (req, res) => {

@@ -2,7 +2,7 @@
 // Den kostenlosen Schlüssel gibt es auf developer.dhl.com (250 Abfragen am Tag,
 // höchstens eine alle 5 Sekunden). Der Schlüssel bleibt auf dem Server.
 // Ohne Schlüssel gibt es nur den Link zur Sendungsverfolgung auf dhl.de.
-import { normalizeTracking } from '../public/js/domain.js';
+import { advanceOrder, normalizeTracking } from '../public/js/domain.js';
 
 const API = 'https://api-eu.dhl.com/track/shipments';
 const STATUS = ['pre-transit', 'transit', 'delivered', 'failure', 'unknown'];
@@ -109,6 +109,9 @@ export class Tracker {
     if (!sale || !sale.tracking || sale.tracking.number !== number) return sale || null;
     const wasDelivered = sale.tracking.status === 'delivered';
     sale.tracking = normalizeTracking({ ...sale.tracking, ...patch, checkedAt: now() });
+    // Bestellstatus für den Kunden folgt der Sendung
+    if (sale.tracking.status === 'delivered') advanceOrder(sale.order, 'zugestellt', now());
+    else if (['transit', 'pre-transit'].includes(sale.tracking.status)) advanceOrder(sale.order, 'versendet', now());
     await this.store.save();
     if (!wasDelivered && sale.tracking.status === 'delivered' && this.notifier) {
       const who = sale.customer ? ` an ${sale.customer.split('\n')[0]}` : '';

@@ -701,3 +701,71 @@ test('Filament abbuchen: Schalter, von Hand je Druck, rückgängig', async () =>
   assert.equal((await call('POST', '/api/drucke/fehlt/abbuchen', {})).status, 404);
   await call('PUT', '/api/bambu/options', { autoBook: false });
 });
+
+test('Bestellverfolgung: Status, Link ohne Passwort, Druckende, DHL', async () => {
+  const created = await call('POST', '/api/verkaeufe', {
+    date: '2026-10-26', customer: 'Lisa Müller\nHauptstr. 1\n12345 Musterstadt',
+    items: [{ title: 'Kürbis', qty: 3, price: 4.5, cost: 1.2, material: 'PLA Basic', colorName: 'Orange', colorHex: '#FF6A13' }, { title: 'Versand', kind: 'versand', qty: 1, price: 4.5, cost: 4.19 }],
+  });
+  const id = created.body.sale.id;
+  assert.deepEqual([created.body.sale.order.status, created.body.sale.order.delivery], ['', 'versand']);
+  const view = (token) => fetch(base + '/api/bestellung', { headers: token ? { 'X-Zugang': token } : {} });
+  assert.equal((await view()).status, 404);
+
+  // Link erstellen startet die Verfolgung
+  const linked = await call('PUT', `/api/verkaeufe/${id}/bestellung`, { link: 'neu', expectedAt: '2026-10-30', note: 'Danke!' });
+  const o = linked.body.sale.order;
+  assert.deepEqual([o.status, o.expectedAt, o.note], ['bestellt', '2026-10-30', 'Danke!']);
+  assert.match(o.token, /^[A-Za-z0-9_-]{24}$/);
+  let res = await view(o.token);
+  assert.equal(res.status, 200);
+  let d = await res.json();
+  assert.deepEqual([d.nr, d.customer, d.price, d.order.status, d.items.length, d.items[0].colorName], [created.body.sale.nr, 'Lisa Müller', 9, 'bestellt', 1, 'Orange']);
+  const text = JSON.stringify(d);
+  for (const secret of ['Hauptstr', 'cost', 'breakdown', 'token', 'customerId']) assert.equal(text.includes(secret), false, secret);
+  assert.equal((await view('falsch-falsch-falsch-falsch')).status, 404);
+
+  // "Wird gedruckt" merkt sich den laufenden Druck und zeigt den Fortschritt
+  const pid = printers.configs[0].id;
+  printers.status = () => printers.current;
+  printers.current = { gcodeState: 'RUNNING', job: 'Kürbis x3', progress: 37, remaining: 70, layer: 120, layers: 300 };
+  printers.emit('update', pid);
+  const printing = await call('PUT', `/api/verkaeufe/${id}/bestellung`, { status: 'druck' });
+  assert.deepEqual(printing.body.sale.order.printJob, { printerId: pid, job: 'Kürbis x3' });
+  d = await (await view(o.token)).json();
+  assert.deepEqual(d.live, { state: 'RUNNING', progress: 37, remaining: 70, layer: 120, layers: 300 });
+  assert.deepEqual(d.order.history.map((h) => h.status), ['bestellt', 'druck']);
+  // Druckende -> verpackt bzw. fertig
+  printers.current = { gcodeState: 'FINISH', job: 'Kürbis x3', progress: 100 };
+  printers.emit('update', pid);
+  await new Promise((r) => setTimeout(r, 20));
+  d = await (await view(o.token)).json();
+  assert.equal(d.order.status, 'fertig');
+  assert.equal(d.live, null);
+  delete printers.status;
+
+  // Sendungsnummer -> versendet, DHL zugestellt -> zugestellt
+  await call('PUT', '/api/dhl', { apiKey: 'test-schluessel-123' });
+  dhlState.delivered = false;
+  const shipped = await call('PUT', `/api/verkaeufe/${id}/sendung`, { number: '00340434161234567890' });
+  assert.equal(shipped.body.sale.order.status, 'versendet');
+  d = await (await view(o.token)).json();
+  assert.deepEqual([d.tracking.status, d.tracking.place], ['transit', 'Bonn']);
+  assert.match(d.tracking.url, /dhl\.de/);
+  dhlState.delivered = true;
+  await call('POST', `/api/verkaeufe/${id}/sendung/pruefen`, {});
+  d = await (await view(o.token)).json();
+  assert.equal(d.order.status, 'zugestellt');
+  assert.deepEqual(d.order.history.map((h) => h.status), ['bestellt', 'druck', 'fertig', 'versendet', 'zugestellt']);
+
+  // Zurück auf einen früheren Schritt, Abholung, unbekannter Status
+  const back = await call('PUT', `/api/verkaeufe/${id}/bestellung`, { status: 'bearbeitung', delivery: 'abholung' });
+  assert.deepEqual([back.body.sale.order.status, back.body.sale.order.delivery, back.body.sale.order.history.length], ['bearbeitung', 'abholung', 2]);
+  assert.equal((await call('PUT', `/api/verkaeufe/${id}/bestellung`, { status: 'quatsch' })).status, 400);
+
+  // Link zurückziehen sperrt die Seite
+  await call('PUT', `/api/verkaeufe/${id}/bestellung`, { link: 'weg' });
+  assert.equal((await view(o.token)).status, 404);
+  await call('PUT', '/api/dhl', { remove: true });
+  assert.equal((await fetch(base + '/bestellung.html')).status, 200);
+});

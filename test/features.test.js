@@ -426,3 +426,23 @@ test('Abbuchen bei Druckende: Rolle im Slot, einmal je Druck, rückgängig', asy
   assert.equal(undoBooking(state, '901', spools), null);
   assert.deepEqual(dueTasks(state, [task]), []); // bleibt gebucht
 });
+
+test('Bestellstatus: Schritte, vorwärts und zurück, Abholung', async () => {
+  const {
+    advanceOrder, normalizeOrder, orderLabel, orderSteps, setOrderStatus,
+  } = await import('../public/js/domain.js');
+  const o = normalizeOrder({}, { shipping: true });
+  assert.deepEqual([o.status, o.delivery, o.token], ['', 'versand', '']);
+  assert.equal(advanceOrder(o, 'versendet'), false); // ohne Verfolgung passiert nichts
+  setOrderStatus(o, 'bestellt', 't1');
+  setOrderStatus(o, 'druck', 't2');
+  assert.equal(advanceOrder(o, 'bearbeitung'), false); // nie rückwärts
+  assert.equal(advanceOrder(o, 'versendet', 't3'), true);
+  setOrderStatus(o, 'bearbeitung', 't4'); // von Hand zurück
+  assert.deepEqual(o.history, [{ status: 'bestellt', at: 't1' }, { status: 'bearbeitung', at: 't4' }]);
+  assert.deepEqual(orderSteps('abholung'), ['bestellt', 'bearbeitung', 'druck', 'fertig', 'zugestellt']);
+  assert.deepEqual([orderLabel('fertig', 'abholung'), orderLabel('fertig', 'versand'), orderLabel('zugestellt', 'abholung')], ['Bereit zur Abholung', 'Verpackt', 'Abgeholt']);
+  assert.equal(normalizeOrder({ token: '<script>' }).token, '');
+  const sale = normalizeSale({ items: [{ title: 'A', qty: 1, price: 1 }] });
+  assert.deepEqual([sale.order.status, sale.order.delivery], ['', 'abholung']);
+});

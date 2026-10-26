@@ -567,6 +567,7 @@ export function normalizeSale(input, { now = new Date().toISOString() } = {}) {
     note: str(src.note),
     items,
     tracking: normalizeTracking(src.tracking), // Sendungsverfolgung
+    order: normalizeOrder(src.order, { shipping: Boolean(src.tracking) || items.some((i) => i.kind === 'versand') }), // Bestellstatus
     minExtra, // Aufschlag auf den Mindestpreis
     fromOffer: str(src.fromOffer), // Nummer des Angebots, aus dem der Beleg entstand
     // Sätze beim Erstellen, damit der Beleg später gleich aussieht
@@ -639,6 +640,80 @@ export function trackingUrl(t) {
 
 // Gültige Sendungsnummer: Buchstaben und Ziffern, 8 bis 35 Zeichen
 export const validTrackingNumber = (n) => /^[A-Z0-9]{8,35}$/.test(str(n).replace(/\s+/g, '').toUpperCase());
+
+// ---------------------------------------------------------------------------
+// Bestellstatus für den Kunden (wie bei Versandhändlern): Schritte mit
+// Zeitpunkt, Link ohne Passwort (bestellung.html#t=…). status '' heißt: Beleg
+// ohne Bestellverfolgung, z. B. direkt verkauft.
+
+export const ORDER_STEPS = ['bestellt', 'bearbeitung', 'druck', 'fertig', 'versendet', 'zugestellt'];
+
+const ORDER_TEXT = {
+  bestellt: ['Bestellung eingegangen', 'Die Bestellung ist angekommen. Danke!'],
+  bearbeitung: ['In Bearbeitung', 'Das Modell wird vorbereitet und das Filament ausgewählt.'],
+  druck: ['Wird gedruckt', 'Das Teil entsteht gerade Schicht für Schicht auf dem 3D-Drucker.'],
+  fertig: ['Verpackt', 'Fertig gedruckt, geprüft und verpackt. Es geht bald auf die Reise.'],
+  versendet: ['Versendet', 'Das Paket ist mit DHL unterwegs.'],
+  zugestellt: ['Zugestellt', 'Das Paket wurde zugestellt. Viel Freude damit!'],
+};
+const PICKUP_TEXT = {
+  fertig: ['Bereit zur Abholung', 'Fertig gedruckt und geprüft, es kann abgeholt werden.'],
+  zugestellt: ['Abgeholt', 'Abgeholt. Viel Freude damit!'],
+};
+
+// Schritte je nach Lieferart; bei Abholung entfällt "versendet".
+export const orderSteps = (delivery) => ORDER_STEPS.filter((s) => delivery !== 'abholung' || s !== 'versendet');
+export const orderLabel = (status, delivery) => ((delivery === 'abholung' && PICKUP_TEXT[status]) || ORDER_TEXT[status] || [''])[0];
+export const orderText = (status, delivery) => ((delivery === 'abholung' && PICKUP_TEXT[status]) || ORDER_TEXT[status] || ['', ''])[1];
+
+export function normalizeOrder(input, { shipping = false } = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  const job = src.printJob && typeof src.printJob === 'object' && str(src.printJob.job) ? { printerId: str(src.printJob.printerId), job: str(src.printJob.job) } : null;
+  return {
+    status: ORDER_STEPS.includes(src.status) ? src.status : '',
+    delivery: ['versand', 'abholung'].includes(src.delivery) ? src.delivery : (shipping ? 'versand' : 'abholung'),
+    history: (Array.isArray(src.history) ? src.history : []).filter((h) => h && ORDER_STEPS.includes(h.status)).slice(-30)
+      .map((h) => ({ status: h.status, at: str(h.at) })),
+    expectedAt: /^\d{4}-\d{2}-\d{2}$/.test(str(src.expectedAt)) ? str(src.expectedAt) : '', // voraussichtlich fertig bzw. da
+    note: String(src.note ?? '').trim().slice(0, 1000), // Hinweis für den Kunden
+    token: /^[A-Za-z0-9_-]{16,64}$/.test(str(src.token)) ? str(src.token) : '', // Link ohne Passwort
+    printJob: job, // Druck, dessen Fortschritt der Kunde sieht
+  };
+}
+
+// Zeitpunkt, an dem ein Schritt erreicht wurde (der letzte Eintrag zählt)
+export function orderStepAt(order, status) {
+  const h = [...order.history].reverse().find((x) => x.status === status);
+  return h ? h.at : '';
+}
+
+// Status setzen (auch zurück, z. B. nach einem Fehldruck). Spätere Schritte
+// verlieren dabei ihren Zeitpunkt.
+export function setOrderStatus(order, status, now = new Date().toISOString()) {
+  if (!ORDER_STEPS.includes(status) || order.status === status) return order;
+  const idx = ORDER_STEPS.indexOf(status);
+  order.history = [...order.history.filter((h) => ORDER_STEPS.indexOf(h.status) < idx), { status, at: now }];
+  order.status = status;
+  if (status !== 'druck') order.printJob = null;
+  return order;
+}
+
+// Nur vorwärts, für automatische Schritte (Sendungsnummer, DHL, Druckende).
+// Nur bei Belegen mit Bestellverfolgung.
+export function advanceOrder(order, status, now = new Date().toISOString()) {
+  if (!order || !order.status) return false;
+  if (ORDER_STEPS.indexOf(status) <= ORDER_STEPS.indexOf(order.status)) return false;
+  setOrderStatus(order, status, now);
+  return true;
+}
+
+export function newToken() {
+  const bytes = new Uint8Array(18);
+  globalThis.crypto.getRandomValues(bytes);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
 
 // ---------------------------------------------------------------------------
 // Eigene Ausgaben (Düsen, Platten, Versandmaterial …) für die Jahresübersicht

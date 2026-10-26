@@ -10,7 +10,9 @@ import { validRfid } from './sync.js';
 const PUSHALL_INTERVAL_MS = 5 * 60 * 1000;
 
 export function emptyPrinterState() {
-  return { ams: {}, external: {}, trayExistBits: null, trayNow: '', gcodeState: '', progress: null, job: '', hasAms: false, lastSeen: 0 };
+  return {
+    ams: {}, external: {}, trayExistBits: null, trayNow: '', gcodeState: '', progress: null, job: '', remaining: null, layer: null, layers: null, hasAms: false, lastSeen: 0,
+  };
 }
 
 // Führt eine "print"-Nachricht mit dem bisherigen Stand zusammen. P1/A1
@@ -49,6 +51,9 @@ export function mergeReport(state, print) {
   if (print.gcode_state !== undefined) state.gcodeState = String(print.gcode_state);
   if (print.mc_percent !== undefined) state.progress = Number(print.mc_percent);
   if (print.subtask_name !== undefined) state.job = String(print.subtask_name);
+  if (print.mc_remaining_time !== undefined) state.remaining = Number(print.mc_remaining_time); // Minuten
+  if (print.layer_num !== undefined) state.layer = Number(print.layer_num);
+  if (print.total_layer_num !== undefined) state.layers = Number(print.total_layer_num);
   return state;
 }
 
@@ -242,8 +247,12 @@ export class PrinterManager extends EventEmitter {
   status(printerId) {
     const conn = this.conns.get(printerId);
     if (!conn) return null;
-    const { gcodeState, progress, job } = conn.state;
-    return { gcodeState, progress, job };
+    const {
+      gcodeState, progress, job, remaining, layer, layers,
+    } = conn.state;
+    return {
+      gcodeState, progress, job, remaining, layer, layers,
+    };
   }
 
   findSlot(printerId, slot) {

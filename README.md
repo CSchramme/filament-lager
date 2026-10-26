@@ -26,6 +26,9 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
 - **Verkauf**: Belege mit der Aufteilung des Preises pro Teil, Angebote, die mit einem Klick zum
   Beleg werden, Kundenliste, Versand als feste Position und **DHL-Sendungsverfolgung** mit der
   Sendungsnummer.
+- **Bestellverfolgung für Kunden** wie bei Versandhändlern: Bestellung eingegangen, in
+  Bearbeitung, wird gedruckt (mit Fortschritt live vom Drucker), verpackt, versendet (mit DHL),
+  zugestellt, über einen Link ohne Passwort.
 - **Schöne Preise**: Preis pro Teil aufrunden (z. B. auf 0,50 €) und **Mengenrabatt** ab einer
   Stückzahl.
 - **Drucke**: Stromabrechnung für den, der den Strom bezahlt, mit einem **Link nur zum Ansehen**
@@ -343,6 +346,32 @@ Der Server fragt jede offene Sendung höchstens alle 3 Stunden ab (kostenlos sin
 Tag), solange die App läuft, und beim Öffnen von „Verkauf“; zugestellte Sendungen und solche, die
 älter als 45 Tage sind, nicht mehr. „Jetzt bei DHL nachsehen“ fragt sofort. Ohne Schlüssel gibt es
 den Link zu dhl.de.
+
+### Bestellverfolgung für Kunden
+
+Der Lkw-Knopf an einem Beleg (oder der Status-Knopf daneben) öffnet **Bestellung**:
+
+- **Status für den Kunden**: Bestellung eingegangen → In Bearbeitung → Wird gedruckt → Verpackt →
+  Versendet → Zugestellt. Bei **Abholung** (statt Versand) heißt es „Bereit zur Abholung“ und
+  „Abgeholt“, „Versendet“ entfällt. Antippen setzt den Schritt mit Datum und Uhrzeit; auch zurück
+  geht es, z. B. nach einem Fehldruck.
+- **Voraussichtlich da bzw. abholbereit** (Datum) und eine **Nachricht an den Kunden**.
+- **Link für den Kunden**: „Link erstellen“ macht einen geheimen Link mit QR-Code zur Seite
+  `bestellung.html`. „Text mit Link kopieren“ (oder „Teilen …“ am iPhone/iPad) gibt einen fertigen
+  Text für WhatsApp oder eine Mail. Der Kunde sieht ohne Passwort den Stand mit allen Schritten,
+  das voraussichtliche Datum, die Nachricht, die Teile mit Farbe und die Summe, aber keine Kosten,
+  keine Adresse und keine anderen Bestellungen. Die Seite aktualisiert sich von selbst.
+  „Zurückziehen“ sperrt den Link.
+- **Von selbst** geht es weiter:
+  - „Wird gedruckt“ merkt sich den Druck, der gerade läuft. Der Kunde sieht dann den Fortschritt
+    live (Prozent, Schicht, Restzeit), und wenn dieser Druck fertig ist, springt der Status auf
+    „Verpackt“ bzw. „Bereit zur Abholung“.
+  - Eine **Sendungsnummer** setzt „Versendet“; der Kunde sieht den DHL-Stand und den Link zu dhl.de.
+  - Meldet DHL die Zustellung (mit DHL-API-Schlüssel), steht „Zugestellt“ da.
+
+Über den Belegen stehen die **offenen Bestellungen** (noch nicht zugestellt), sortiert nach dem
+voraussichtlichen Datum, mit einem Knopf für den nächsten Schritt. Belege ohne Bestellverfolgung
+(z. B. direkt verkauft) bleiben, wie sie sind.
 
 ## Strom und Druckverlauf
 

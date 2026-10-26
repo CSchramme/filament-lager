@@ -2,9 +2,9 @@
 // alle Änderungen dorthin. Ohne Server (z. B. als statische Seite) speichert
 // das Lager im Browser; die Bambu-Anbindung ist dann nicht verfügbar.
 import {
-  applyPriceChanges, applyStockSale, archiveSpool, assignNumbers, mergeStock, migratePriceList, newId, nextOfferNr, nextReceiptNr, normalizeCustomer,
+  advanceOrder, applyPriceChanges, applyStockSale, archiveSpool, assignNumbers, mergeStock, migratePriceList, newId, nextOfferNr, nextReceiptNr, normalizeCustomer,
   normalizeArchivedSpool, normalizeExpense, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
-  normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
+  normalizeOrder, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary, setOrderStatus,
 } from './domain.js';
 import { seedSpools } from './seed.js';
 
@@ -56,6 +56,7 @@ class ServerBackend {
   setTracking(id, number) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id) + '/sendung', { number }); }
   checkTracking(id) { return this.req('POST', 'api/verkaeufe/' + encodeURIComponent(id) + '/sendung/pruefen', {}); }
   dhlSettings() { return this.req('GET', 'api/dhl'); }
+  updateOrder(id, body) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id) + '/bestellung', body); }
   saveDhl(body) { return this.req('PUT', 'api/dhl', body); }
   notifySettings() { return this.req('GET', 'api/benachrichtigungen'); }
   saveNotify(body) { return this.req('PUT', 'api/benachrichtigungen', body); }
@@ -263,6 +264,28 @@ class LocalBackend {
     if (!sale) throw new Error('Beleg nicht gefunden.');
     if (!number) sale.tracking = null;
     else if (!sale.tracking || sale.tracking.number !== number) sale.tracking = normalizeTracking({ number });
+    if (number) {
+      sale.order.delivery = 'versand';
+      advanceOrder(sale.order, 'versendet');
+    }
+    this.write(data);
+    return { sale, ...this.salesView(data) };
+  }
+
+  // Status ohne Server; einen Link für Kunden gibt es nur mit Server
+  async updateOrder(id, b) {
+    if (b.link === 'neu') throw new Error('Einen Link für Kunden gibt es nur mit dem Lager-Server.');
+    const data = this.load();
+    const sale = data.sales.find((x) => x.id === id);
+    if (!sale) throw new Error('Beleg nicht gefunden.');
+    const o = sale.order;
+    if (b.status === '') Object.assign(o, { status: '', history: [], token: '', printJob: null });
+    else if (b.status) setOrderStatus(o, b.status);
+    if (b.delivery !== undefined) o.delivery = b.delivery;
+    if (b.expectedAt !== undefined) o.expectedAt = b.expectedAt;
+    if (b.note !== undefined) o.note = b.note;
+    if (b.link === 'weg') o.token = '';
+    sale.order = normalizeOrder(o);
     this.write(data);
     return { sale, ...this.salesView(data) };
   }

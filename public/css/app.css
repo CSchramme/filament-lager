@@ -851,3 +851,45 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
   .customer-row { grid-template-columns: minmax(0, 1fr) auto; }
   .customer-row > .num { grid-column: 1; }
 }
+
+/* Bestellstatus für Kunden (bestellung.html) */
+.order-hero h1 { font-size: var(--step-3); }
+.order-expect { font-size: var(--step-1); }
+.order-live { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+.order-live-head { display: flex; justify-content: space-between; gap: 8px; }
+.order-meter { height: 10px; border-radius: 5px; }
+.order-meter span { background: var(--accent); border-radius: 5px; }
+.order-steps { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 0; }
+.order-step { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; padding-bottom: 18px; }
+.order-step:last-child { padding-bottom: 0; }
+/* Verbindungslinie zum nächsten Schritt */
+.order-step:not(:last-child)::before { content: ""; position: absolute; left: 13px; top: 28px; bottom: 0; width: 2px; background: var(--line); }
+.order-step[data-state="done"]:not(:last-child)::before { background: var(--accent); }
+.order-dot { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--line); background: var(--surface); display: grid; place-items: center; }
+.order-dot svg { width: 18px; height: 18px; fill: none; stroke: var(--accent-ink, #fff); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.order-step[data-state="done"] .order-dot { background: var(--accent); border-color: var(--accent); }
+.order-step[data-state="current"] .order-dot { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.order-step[data-state="current"] .order-dot::after { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+.order-step[data-state="todo"] .order-step-text { color: var(--ink-3); }
+.order-step-text { display: grid; gap: 2px; padding-top: 3px; }
+@media (min-width: 720px) {
+  /* nebeneinander wie bei Versandhändlern */
+  .order-steps { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+  .order-step { grid-template-columns: minmax(0, 1fr); justify-items: center; text-align: center; padding-bottom: 0; gap: 8px; }
+  .order-step:not(:last-child)::before { left: calc(50% + 14px); right: calc(-50% + 14px); top: 13px; bottom: auto; width: auto; height: 2px; }
+}
+.order-note { white-space: pre-line; }
+.order-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.order-items li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.order-swatch { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--line); align-self: center; }
+.order-foot { margin: 8px 0 24px; }
+
+/* Bestellstatus im Verkauf */
+.order-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.order-pick button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink, #fff); }
+.order-pick button.done { border-color: var(--accent); }
+.pill.order { background: var(--accent-soft); color: var(--ink); }
+.pill.order.zugestellt { background: var(--ok-soft); color: var(--ok); }
+.dlg-section { display: grid; gap: 8px; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--line); }
+.dlg-section:first-child { padding-top: 0; margin-top: 0; border-top: 0; }
+.open-orders { display: grid; margin-bottom: 8px; }
