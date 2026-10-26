@@ -6,10 +6,11 @@ import {
 } from './domain.js';
 import { openJob } from './calculator.js';
 import { openPowerStatement } from './documents.js';
+import { qrSvg } from './qr.js';
 import { addPosition } from './sales.js';
 import { addStockDialog } from './stock.js';
 import {
-  dateDe, esc, fmtCt, fmtDuration, fmtEur, fmtNum, localDay, openDialog, plural, tile, timeAgo, toast,
+  dateDe, esc, fmtCt, fmtDuration, fmtEur, fmtNum, icons, localDay, openDialog, plural, tile, timeAgo, toast,
 } from './ui.js';
 
 const STATUS = { 2: ['ok', 'fertig'], 3: ['crit', 'abgebrochen'] };
@@ -72,6 +73,7 @@ function updatePower() {
       <label class="inline-field"><span>Ab</span><input type="date" data-power="since" value="${esc(localDay(new Date(p.from)))}"></label>
       <button class="btn" type="button" data-power="show">Abrechnung ansehen</button>
       <button class="btn primary" type="button" data-power="pay" ${p.amount > 0 ? '' : 'disabled'}>${esc(fmtEur(p.amount))} an ${esc(who)} gegeben</button>
+      ${ctx.app.backend.mode === 'server' ? `<button class="btn" type="button" data-power="share">${icons.qr}Link für ${esc(who)}</button>` : ''}
     </div>
     ${payments.length ? `<h3>Abgerechnet</h3><div class="sale-list">${payments.map((x) => `
       <div class="sale-row">
@@ -95,6 +97,7 @@ function onPowerClick(e) {
   const { settings } = ctx.app;
   const action = b.dataset.power;
   if (action === 'show') openPowerStatement(currentPower(), settings);
+  if (action === 'share') shareDialog();
   if (action === 'pay') {
     const p = currentPower();
     openDialog({
@@ -131,6 +134,64 @@ function onPowerClick(e) {
   }
 }
 
+// Geheimer Link zur Nur-Lese-Ansicht strom.html für den, der den Strom zahlt
+async function shareDialog() {
+  const who = ctx.app.settings.powerPayee;
+  let share;
+  try {
+    share = await ctx.app.backend.share();
+  } catch (err) {
+    toast(err.message, 'error');
+    return;
+  }
+  const link = (s) => new URL(`strom.html#t=${s.token}`, location.href).href;
+  const body = (s) => (s.token
+    ? `<p>Mit diesem Link sieht ${esc(who)} den offenen Strombetrag, die Drucke seit der letzten Abrechnung und alle bisherigen Abrechnungen. Ändern kann ${esc(who)} nichts, Kunden und Belege bleiben verborgen.</p>
+      <div class="share-box">
+        <div class="share-qr">${qrSvg(link(s), { border: 2, title: 'Link als QR-Code' })}</div>
+        <div class="share-link"><span class="copy-row"><input id="share-link" readonly value="${esc(link(s))}" aria-label="Link"><button class="btn" type="button" data-share="copy">Kopieren</button></span>
+          <p class="small muted">Per Nachricht schicken oder den QR-Code mit dem Handy von ${esc(who)} scannen. Seit ${dateDe(s.createdAt)} gültig.</p></div>
+      </div>`
+    : `<p>Ein geheimer Link, mit dem ${esc(who)} den offenen Strombetrag und die Abrechnungen ansehen kann, ohne Passwort und ohne etwas ändern zu können.</p>`);
+  const foot = (s) => (s.token
+    ? '<button type="button" class="btn danger" data-share="stop">Link zurückziehen</button><span class="spacer"></span><button type="button" class="btn" data-share="new">Neuer Link</button><button type="button" class="btn primary" data-close>Fertig</button>'
+    : '<span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="button" class="btn primary" data-share="new">Link erstellen</button>');
+  const dlg = openDialog({ title: `Link für ${esc(who)}`, body: body(share), foot: foot(share) });
+  const redraw = (s) => {
+    share = s;
+    dlg.querySelector('.dlg-body').innerHTML = body(s);
+    dlg.querySelector('.dlg-foot').innerHTML = foot(s);
+  };
+  dlg.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-share]');
+    if (!b) return;
+    try {
+      if (b.dataset.share === 'copy') {
+        await navigator.clipboard.writeText(link(share)).then(() => toast('Link kopiert'), () => {
+          dlg.querySelector('#share-link').select();
+          toast('Link markiert, jetzt kopieren');
+        });
+      }
+      if (b.dataset.share === 'new') {
+        // Bei einem bestehenden Link erst nachfragen: der alte geht dann nicht mehr
+        if (share.token && !b.dataset.sure) {
+          b.dataset.sure = '1';
+          b.textContent = 'Alter Link geht dann nicht mehr. Sicher?';
+          return;
+        }
+        redraw(await ctx.app.backend.newShare());
+        toast(`Link für ${who} erstellt`);
+      }
+      if (b.dataset.share === 'stop') {
+        redraw(await ctx.app.backend.stopShare());
+        toast('Link zurückgezogen, er funktioniert nicht mehr');
+      }
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Druckverlauf
 
@@ -151,6 +212,7 @@ function taskCard(t) {
       <div class="status-line"><span><span class="dot ${dot}"></span>${esc(label)}</span><span>${esc(date)}</span>${t.deviceName ? `<span>${esc(t.deviceName)}</span>` : ''}
         <span class="num">${fmtNum(t.grams)} g</span>${t.seconds ? `<span class="num">${fmtDuration(t.seconds)}</span>` : ''}</div>
       ${colors ? `<div class="fils">${colors}</div>` : ''}
+      ${bookingHtml(t)}
     </div>
     <div class="task-side">
       <span class="small muted">Preis</span><strong class="num">${fmtEur(q.piece)}</strong><span class="small muted">Kosten ${fmtEur(q.cost)}</span>
@@ -160,8 +222,25 @@ function taskCard(t) {
       <button class="btn small" type="button" data-task="stock">Auf Vorrat</button>
       <button class="btn small" type="button" data-task="calc">Im Rechner</button>
       <button class="btn small" type="button" data-task="reprint">Erneut drucken</button>
+      ${t.status === 2 ? bookButton((history.bookings || {})[t.id]) : ''}
     </div>
   </article>`;
+}
+
+function bookButton(e) {
+  if (e && e.items.length && !e.undone) return '';
+  return `<button class="btn small" type="button" data-task="book">${e ? 'Erneut abbuchen' : 'Filament abbuchen'}</button>`;
+}
+
+// Was beim Abbuchen von welcher Rolle abgezogen wurde
+function bookingHtml(t) {
+  const e = (history.bookings || {})[t.id];
+  if (!e) return '';
+  const done = e.items.map((i) => `#${i.nr} −${fmtNum(i.taken ?? i.grams, 0)} g`).join(', ');
+  const skipped = e.skipped.map((x) => `${fmtNum(x.grams)} g${x.slot ? ` aus ${esc(x.slot)}` : ''}${x.nr ? ` (#${x.nr})` : ''}: ${esc(x.reason)}`).join('; ');
+  if (e.undone) return `<p class="task-book small muted">Abbuchung zurückgenommen (${esc(done || 'nichts')}).</p>`;
+  return `<p class="task-book small">${done ? `<span class="pill ams">abgebucht</span> ${esc(done)} <button type="button" class="link" data-task="undo">Rückgängig</button>` : '<span class="pill">nicht abgebucht</span>'}
+    ${skipped ? `<span class="muted"> · ${skipped}</span>` : ''}</p>`;
 }
 
 function updateHistory() {
@@ -179,7 +258,7 @@ function updateHistory() {
     return;
   }
   el.innerHTML = `${head}
-    <p class="small muted">Preis = Filament (Kaufpreis der passenden Rolle je Farbe), Strom, Drucker ${fmtEur(s.machineRate)} pro Stunde, ${fmtNum(s.failPct, 0)} % für Fehldrucke, ${fmtNum(s.laborMinutes, 0)} Min. Arbeit, dazu ${fmtNum(s.profitPct, 0)} % Gewinn. Das Filament zieht der Abgleich mit Bambu im Lager ab, sofern die Rollen dort verknüpft sind.</p>
+    <p class="small muted">Preis = Filament (Kaufpreis der passenden Rolle je Farbe), Strom, Drucker ${fmtEur(s.machineRate)} pro Stunde, ${fmtNum(s.failPct, 0)} % für Fehldrucke, ${fmtNum(s.laborMinutes, 0)} Min. Arbeit, dazu ${fmtNum(s.profitPct, 0)} % Gewinn. ${history.autoBook ? 'Fertige Drucke werden automatisch von der Rolle im AMS abgebucht.' : 'Das Filament zieht der Abgleich mit Bambu ab, sofern die Rollen im Filament Manager verknüpft sind; sonst „Filament abbuchen“ oder unter „Bambu“ das automatische Abbuchen einschalten.'}</p>
     ${history.tasks.length ? `<div class="tasks">${history.tasks.map(taskCard).join('')}</div>` : '<p class="muted">Noch keine Drucke gefunden. „Aktualisieren“ holt den Verlauf von Bambu.</p>'}`;
 }
 
@@ -190,6 +269,7 @@ async function onHistoryClick(e) {
     h.disabled = true;
     try {
       history = await ctx.app.backend.refreshTasks();
+      if (history.spools) ctx.app.spools = history.spools;
       updateHistory();
       updatePower();
       toast('Druckverlauf aktualisiert');
@@ -225,6 +305,21 @@ async function onHistoryClick(e) {
     });
   }
   if (b.dataset.task === 'reprint') reprintDialog(task);
+  if (b.dataset.task === 'book' || b.dataset.task === 'undo') {
+    b.disabled = true;
+    try {
+      const res = b.dataset.task === 'book' ? await ctx.app.backend.bookTask(task.id) : await ctx.app.backend.undoBooking(task.id);
+      history = { ...history, ...res };
+      ctx.app.spools = res.spools;
+      updateHistory();
+      const items = res.entry.items.map((i) => `#${i.nr} ${b.dataset.task === 'book' ? '−' : '+'}${fmtNum(i.taken ?? i.grams, 0)} g`).join(', ');
+      const why = [...new Set(res.entry.skipped.map((x) => x.reason))].join(', ');
+      toast(items ? `${b.dataset.task === 'book' ? 'Abgebucht' : 'Zurückgebucht'}: ${items}` : `Nichts abgebucht: ${why}`, items ? '' : 'error');
+    } catch (err) {
+      toast(err.message, 'error');
+      b.disabled = false;
+    }
+  }
 }
 
 // Druck auf den Beleg: Waren mehrere gleiche Teile auf der Platte, werden

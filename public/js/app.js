@@ -1023,6 +1023,7 @@ function updatePrinters(force = false) {
     <div class="grid-2">
       <label class="switch"><input type="checkbox" data-option="autoAms" ${o.autoAms ? 'checked' : ''}><span>„Im AMS“ automatisch setzen<small>Erkennt Bambu-Spulen per RFID und Spulen, die du einem Slot zugeordnet hast. Wird der Slot leer, gilt die Spule wieder als im Lager.</small></span></label>
       <label class="switch"><input type="checkbox" data-option="amsWeights" ${o.amsWeights ? 'checked' : ''}><span>Restgewicht aus dem AMS übernehmen<small>Nur Bambu-Spulen mit RFID. Das AMS meldet grobe Prozentwerte und überschreibt gewogene Werte.</small></span></label>
+      <label class="switch"><input type="checkbox" data-option="autoBook" ${o.autoBook ? 'checked' : ''}><span>Filament bei Druckende abbuchen<small>Zieht nach jedem fertigen Druck die Gramm je Slot von der Rolle im AMS ab, für Drucke ab dem Einschalten. Rollen, die der Bambu Filament Manager oder das AMS schon zählt, bleiben unberührt. Unter „Drucke“ steht, was abgebucht wurde, mit „Rückgängig“.</small></span></label>
     </div>`;
 }
 
@@ -1182,8 +1183,10 @@ function renderSettings() {
       <div class="panel-head"><h2>Daten</h2><p>${server ? 'Gespeichert auf dem Server in data/lager.json' : 'Gespeichert nur in diesem Browser'}</p></div>
       <div class="actions">
         <button class="btn" type="button" data-action="export-csv">${icons.file}Für Excel exportieren (CSV)</button>
-        <button class="btn" type="button" data-action="export-json">${icons.down}Sicherung (JSON)</button>
+        ${server ? `<a class="btn" href="api/sicherungen/aktuell" download>${icons.down}Ganzes Lager sichern (JSON)</a>`
+    : `<button class="btn" type="button" data-action="export-json">${icons.down}Sicherung (JSON)</button>`}
       </div>
+      ${server ? '<div id="backup-body" class="small muted">Sicherungen laden …</div>' : ''}
       <form data-form="import" class="fields">
         <label class="field full"><span>Import aus Excel (CSV) oder einer Sicherung (JSON)</span><input type="file" name="file" accept=".csv,.txt,.json,text/csv,application/json" required></label>
         <label class="switch"><input type="radio" name="mode" value="append" checked><span>Zum Bestand hinzufügen</span></label>
@@ -1213,6 +1216,7 @@ function renderSettings() {
     <div id="api-body" class="small muted">Lädt …</div>
   </section>` : ''}`;
   if (server) {
+    updateBackupPanel();
     updateNotifyPanel();
     updateDhlPanel();
     updateApiPanel();
@@ -1226,6 +1230,42 @@ const NOTIFY_EVENTS = [
   ['low', 'Rolle wird knapp oder leer'],
   ['delivered', 'Paket zugestellt (mit DHL-Schlüssel)'],
 ];
+
+const BACKUP_KINDS = { taeglich: 'täglich', manuell: 'von Hand', 'vor-wiederherstellen': 'vor dem Zurückholen' };
+
+async function updateBackupPanel() {
+  const el = document.getElementById('backup-body');
+  if (!el) return;
+  let list;
+  try {
+    list = (await app.backend.backups()).backups;
+  } catch (err) {
+    el.textContent = err.message;
+    return;
+  }
+  el.classList.remove('small', 'muted');
+  const kb = (n) => `${fmt(Math.max(1, n / 1024))} KB`;
+  el.innerHTML = `<h3>Automatische Sicherungen</h3>
+    <p class="small muted">Jeden Tag sichert der Server das ganze Lager (Rollen, Belege, Kunden, Verlauf) in <code>data/backups/</code>; die letzten 14 Tage bleiben.
+      Plesk sichert den Ordner mit. Zum Herunterladen ohne Passwörter und Zugangsschlüssel.</p>
+    ${list.length ? `<div class="backup-list">${list.slice(0, 30).map((b) => `<div class="backup-row">
+        <span><strong>${esc(new Date(b.createdAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' }))}</strong> <span class="small muted">${esc(BACKUP_KINDS[b.kind] || b.kind)} · ${kb(b.size)}</span></span>
+        <a class="btn small" href="api/sicherungen/${encodeURIComponent(b.name)}" download>Herunterladen</a>
+        <button class="btn small" type="button" data-action="backup-restore" data-name="${esc(b.name)}">Zurückholen</button>
+      </div>`).join('')}</div>` : '<p class="small muted">Noch keine Sicherung. Die erste entsteht kurz nach dem Start der App oder mit „Jetzt sichern“.</p>'}
+    <div class="actions"><button class="btn" type="button" data-action="backup-now">Jetzt sichern</button></div>
+    <form data-form="restore" class="fields">
+      <label class="field full"><span>Sicherung aus einer Datei zurückholen</span><input type="file" name="file" accept=".json,application/json" required></label>
+      <div class="actions full"><button class="btn" type="submit">Datei zurückholen</button></div>
+    </form>`;
+}
+
+async function restoreBackup(label, body) {
+  if (!(await confirmDialog(`Das Lager auf den Stand ${esc(label)} zurücksetzen? Alles, was danach geändert wurde, ist dann weg. Der jetzige Stand wird vorher gesichert. Bambu-, ntfy- und DHL-Zugang bleiben, wie sie sind.`, 'Zurückholen', true))) return;
+  await app.backend.restoreBackup(body);
+  toast('Sicherung zurückgeholt, das Lager lädt neu');
+  setTimeout(() => location.reload(), 800);
+}
 
 async function updateDhlPanel() {
   const el = document.getElementById('dhl-body');
@@ -1439,6 +1479,16 @@ const actions = {
     const inputs = document.querySelectorAll('[data-types] [name="typeName"]');
     inputs[inputs.length - 1].focus();
   },
+  'backup-now': () => run(async () => {
+    const res = await app.backend.createBackup();
+    await updateBackupPanel();
+    toast(`Gesichert: ${res.name}`);
+  }),
+  'backup-restore': (el) => run(async () => {
+    const name = el.dataset.name;
+    const row = el.closest('.backup-row');
+    await restoreBackup(`vom ${row ? row.querySelector('strong').textContent : name}`, { name });
+  }),
   'dhl-remove': () => run(async () => {
     await app.backend.saveDhl({ remove: true });
     await updateDhlPanel();
@@ -1593,6 +1643,17 @@ const forms = {
     });
     await updateNotifyPanel();
     toast(f.enabled.checked ? 'Benachrichtigungen eingeschaltet' : 'Benachrichtigungen gespeichert (aus)');
+  },
+  async restore(f) {
+    const file = f.file.files[0];
+    if (!file) throw new Error('Bitte eine Sicherungsdatei auswählen.');
+    let data;
+    try {
+      data = JSON.parse(await readFile(file));
+    } catch {
+      throw new Error('Die Datei ist keine gültige JSON-Sicherung.');
+    }
+    await restoreBackup(`aus „${file.name}“`, { data });
   },
   async dhl(f) {
     if (!f.apiKey.value.trim()) throw new Error('Bitte den API-Schlüssel eintragen.');

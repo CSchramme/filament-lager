@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
 import {
-  applyPriceChanges, applyStockSale, archiveSpool, colorNameFor, mergeStock, newId, normalizeCustomer, normalizeExpense, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
+  applyPriceChanges, applyStockSale, archiveSpool, colorNameFor, openPower, mergeStock, newId, normalizeCustomer, normalizeExpense, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
   normalizeSettings, normalizeSpool, normalizeStockItem, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
   validTrackingNumber,
 } from '../public/js/domain.js';
@@ -15,12 +15,16 @@ import {
 import { reconcileAms } from './bambu/ams.js';
 import { applyPull, applyPush, pullPreview, pushPreview } from './bambu/sync.js';
 import { mergeTasks, taskSummary } from './bambu/tasks.js';
+import {
+  bookTask, canBookAgain, dueTasks, normalizeAutoBook, undoBooking,
+} from './bambu/autobook.js';
 import { createAuth } from './auth.js';
 import { createPublicApi, newApiKey } from './api-v1.js';
 import {
   EVENTS, newTopic, normalizeNotify, Notifier, validateNotify,
 } from './notify.js';
 import { Tracker } from './dhl.js';
+import { Backups, withoutSecrets } from './backup.js';
 
 // Versionskennung der Oberfläche aus Name, Größe und Änderungszeit der Module
 // und Stylesheets. index.html lädt damit "app.js?v=…", sodass der Browser nach
@@ -49,12 +53,14 @@ class HttpError extends Error {
 // bleibt die Schnittstelle gesperrt, damit niemand den Bestand ändern kann.
 export function createApp({
   store, printers, publicDir, password = '', requirePassword = false, cloudFactory = (opts) => new BambuCloud(opts),
-  notifyFetch = (...a) => fetch(...a), dhlFetch = (...a) => fetch(...a),
+  notifyFetch = (...a) => fetch(...a), dhlFetch = (...a) => fetch(...a), backupDir = path.join(path.dirname(store.file), 'backups'),
 }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 'loopback');
-  app.use(express.json({ limit: '5mb' }));
+  const json = express.json({ limit: '5mb' });
+  const RESTORE = '/api/sicherungen/zurueckholen';
+  app.use((req, res, next) => (req.path === RESTORE ? next() : json(req, res, next)));
   // Die Oberfläche selbst enthält keine Lagerdaten und ist ohne Anmeldung abrufbar.
   // version.json gibt es nicht als Datei; auch auf Plesk, wo der Webserver die
   // übrigen Dateien selbst ausliefert, beantwortet sie deshalb immer die App.
@@ -96,6 +102,45 @@ export function createApp({
     apiKey: () => store.data.apiKey || '',
     isLoggedIn: (req) => ['ok', 'none'].includes(authState(req)),
   }));
+
+  // Nur-Lese-Ansicht der Stromabrechnung (z. B. für Papa) über einen geheimen
+  // Link: strom.html#t=… schickt den Schlüssel im Header, damit er nicht in
+  // Server-Protokollen landet. Zeigt nur Strom, keine Kunden oder Belege.
+  const shareOk = (token) => {
+    const want = store.data.share && store.data.share.token;
+    if (!want || !token) return false;
+    const h = (v) => crypto.createHash('sha256').update(String(v)).digest();
+    return crypto.timingSafeEqual(h(token), h(want));
+  };
+
+  app.get('/api/strom-ansicht', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (!shareOk(req.get('x-zugang'))) throw new HttpError(403, 'Dieser Link gilt nicht mehr. Bitte nach einem neuen fragen.');
+    // Verlauf auffrischen, wenn er älter als 10 Minuten ist (höchstens 8 Sekunden warten)
+    const c = cloudCfg();
+    if (c.token && Date.now() - (Date.parse(c.lastTasksAt) || 0) > 10 * 60 * 1000) {
+      await Promise.race([refreshTasks().catch(() => {}), new Promise((r) => { setTimeout(r, 8000).unref(); })]);
+    }
+    const { settings } = store.data;
+    const power = openPower({
+      tasks: store.data.tasks || [], sales: store.data.sales, payments: store.data.powerPayments, settings,
+    });
+    const printing = printers && typeof printers.status === 'function'
+      ? printerConfigs().map((p) => ({ name: p.name, ...(printers.status(p.id) || {}) })).filter((p) => p.gcodeState) : [];
+    res.json({
+      payee: settings.powerPayee,
+      seller: settings.sellerName,
+      energyPrice: settings.energyPrice,
+      printerWatts: settings.printerWatts,
+      power,
+      payments: store.data.powerPayments,
+      printing: printing.map((p) => ({
+        name: p.name, gcodeState: p.gcodeState, job: p.job || '', progress: Number.isFinite(p.progress) ? p.progress : null,
+      })),
+      lastSync: c.lastTasksAt || '',
+      generatedAt: new Date().toISOString(),
+    });
+  });
 
   app.use('/api', (req, res, next) => {
     const state = authState(req);
@@ -152,10 +197,23 @@ export function createApp({
   const tracker = new Tracker({ store, notifier, fetchFn: dhlFetch });
 
   if (printers) {
+    const lastState = new Map(); // Drucker-ID -> gcode_state, für "Druck fertig"
     printers.on('update', (id) => {
       if (id && typeof printers.status === 'function') {
         const cfg = printerConfigs().find((c) => c.id === id);
-        notifier.printerUpdate(id, cfg ? cfg.name : '', printers.status(id) || {});
+        const st = printers.status(id) || {};
+        notifier.printerUpdate(id, cfg ? cfg.name : '', st);
+        const prev = lastState.get(id);
+        lastState.set(id, st.gcodeState);
+        // Druck fertig: Bambu trägt ihn nach kurzer Zeit in den Verlauf ein,
+        // dann holen und abbuchen (zweiter Versuch, falls es länger dauert).
+        if (st.gcodeState === 'FINISH' && prev && prev !== 'FINISH' && store.bambu.options.autoBook) {
+          for (const ms of [90 * 1000, 5 * 60 * 1000]) {
+            setTimeout(() => {
+              if (cloudCfg().token) refreshTasks().catch((err) => console.error('Druckverlauf nicht abrufbar:', err.message));
+            }, ms).unref();
+          }
+        }
       }
       if (applyAmsChanges()) store.save().catch((err) => console.error('Speichern fehlgeschlagen:', err.message));
     });
@@ -202,7 +260,20 @@ export function createApp({
     const raw = await withCloud((c) => c.listTasks({ limit: 50 }));
     store.data.tasks = mergeTasks(store.data.tasks || [], raw.map(taskSummary));
     cloudCfg().lastTasksAt = new Date().toISOString();
+    autoBookDue();
     if (save) await store.save();
+  }
+
+  // Fertige Drucke abbuchen (wenn eingeschaltet). Speichern macht der Aufrufer.
+  const bookState = () => {
+    if (!store.data.autoBook) store.data.autoBook = normalizeAutoBook();
+    return store.data.autoBook;
+  };
+  const bookOptions = () => ({ autoSync: store.bambu.options.autoSync, amsWeights: store.bambu.options.amsWeights });
+  function autoBookDue() {
+    if (!store.bambu.options.autoBook) return [];
+    const state = bookState();
+    return dueTasks(state, store.data.tasks || []).map((t) => bookTask(state, t, store.spools, bookOptions())).filter(Boolean);
   }
 
   // Automatischer Abgleich mit dem Filament Manager: neue Spulen, Zuordnungen
@@ -305,6 +376,55 @@ export function createApp({
     res.json({ ok: true });
   });
 
+  // Sicherungen: täglich automatisch (server.js), von Hand, herunterladen, zurückholen
+  const backups = new Backups({ store, dir: backupDir });
+  const backupsView = async () => ({ backups: await backups.list() });
+  const sendBackup = (res, name, data) => {
+    res.set('Content-Disposition', `attachment; filename="${name}"`);
+    res.type('application/json').send(JSON.stringify(withoutSecrets(data), null, 2));
+  };
+  app.get('/api/sicherungen', async (req, res) => res.json(await backupsView()));
+  app.post('/api/sicherungen', async (req, res) => {
+    const name = await backups.create('manuell');
+    res.status(201).json({ name, ...(await backupsView()) });
+  });
+  app.get('/api/sicherungen/aktuell', (req, res) => {
+    const d = new Date();
+    sendBackup(res, `filament-lager-${d.toISOString().slice(0, 10)}.json`, store.data);
+  });
+  app.get('/api/sicherungen/:name', async (req, res) => {
+    try {
+      sendBackup(res, req.params.name, await backups.read(req.params.name));
+    } catch (err) {
+      throw new HttpError(err.status || 500, err.message);
+    }
+  });
+  app.post(RESTORE, express.json({ limit: '50mb' }), async (req, res) => {
+    const body = req.body || {};
+    let before;
+    try {
+      const raw = body.name ? await backups.read(String(body.name)) : body.data;
+      before = await backups.restore(raw);
+    } catch (err) {
+      throw new HttpError(err.status || 400, err.message);
+    }
+    res.json({ ok: true, before, ...(await backupsView()) });
+  });
+
+  // Link zur Strom-Ansicht erstellen, ansehen oder zurückziehen
+  const shareView = () => ({ token: (store.data.share && store.data.share.token) || '', createdAt: (store.data.share && store.data.share.createdAt) || '' });
+  app.get('/api/teilen', (req, res) => res.json(shareView()));
+  app.post('/api/teilen', async (req, res) => {
+    store.data.share = { token: crypto.randomBytes(18).toString('base64url'), createdAt: new Date().toISOString() };
+    await store.save();
+    res.json(shareView());
+  });
+  app.delete('/api/teilen', async (req, res) => {
+    store.data.share = { token: '', createdAt: '' };
+    await store.save();
+    res.json(shareView());
+  });
+
   // Gelöschte Rollen mit Kaufpreis (für die Jahresübersicht)
   app.get('/api/rollen-archiv', (req, res) => res.json({ archive: store.data.spoolArchive || [] }));
 
@@ -370,13 +490,39 @@ export function createApp({
 
   // -- Druckverlauf und Verkäufe ---------------------------------------------
 
-  const tasksView = () => ({ connected: Boolean(cloudCfg().token), lastSync: cloudCfg().lastTasksAt || '', tasks: store.data.tasks || [] });
+  // bookings: Abbuchungen je Druck; spools nur, wenn sich Gewichte geändert haben können
+  const tasksView = () => ({
+    connected: Boolean(cloudCfg().token),
+    lastSync: cloudCfg().lastTasksAt || '',
+    tasks: store.data.tasks || [],
+    autoBook: Boolean(store.bambu.options.autoBook),
+    bookings: Object.fromEntries(bookState().log.map((e) => [e.taskId, e])),
+  });
 
   app.get('/api/drucke', (req, res) => res.json(tasksView()));
 
   app.post('/api/drucke/aktualisieren', async (req, res) => {
     await refreshTasks();
-    res.json(tasksView());
+    res.json({ ...tasksView(), spools: store.spools });
+  });
+
+  // Einen Druck von Hand abbuchen (auch ohne automatisches Abbuchen)
+  app.post('/api/drucke/:id/abbuchen', async (req, res) => {
+    const task = (store.data.tasks || []).find((t) => t.id === req.params.id);
+    if (!task) throw new HttpError(404, 'Druck nicht gefunden.');
+    const state = bookState();
+    if (!canBookAgain(state, task.id)) throw new HttpError(409, 'Dieser Druck ist schon abgebucht.');
+    delete state.booked[task.id];
+    const entry = bookTask(state, task, store.spools, bookOptions());
+    await store.save();
+    res.json({ entry, ...tasksView(), spools: store.spools });
+  });
+
+  app.post('/api/drucke/:id/rueckgaengig', async (req, res) => {
+    const entry = undoBooking(bookState(), req.params.id, store.spools);
+    if (!entry) throw new HttpError(409, 'Für diesen Druck gibt es keine Abbuchung zum Zurücknehmen.');
+    await store.save();
+    res.json({ entry, ...tasksView(), spools: store.spools });
   });
 
   const salesView = () => ({ sales: store.data.sales, summary: salesSummary(store.data.sales), stock: store.data.stock });
@@ -749,7 +895,9 @@ export function createApp({
 
   app.put('/api/bambu/options', async (req, res) => {
     const o = req.body || {};
-    for (const k of ['autoAms', 'amsWeights', 'autoSync', 'cloudAms']) if (typeof o[k] === 'boolean') store.bambu.options[k] = o[k];
+    // Abbuchen gilt ab dem Einschalten, ältere Drucke bleiben unberührt
+    if (o.autoBook === true && !store.bambu.options.autoBook) bookState().since = new Date().toISOString();
+    for (const k of ['autoAms', 'amsWeights', 'autoSync', 'cloudAms', 'autoBook']) if (typeof o[k] === 'boolean') store.bambu.options[k] = o[k];
     syncPrinters();
     applyAmsChanges();
     await store.save();
@@ -860,6 +1008,7 @@ export function createApp({
   // Für den Start und den Zeitgeber in server.js.
   app.locals.autoSync = autoSync;
   app.locals.tracker = tracker;
+  app.locals.backups = backups;
   app.locals.startBambu = async () => {
     syncPrinters();
     if (!cloudCfg().token) return;

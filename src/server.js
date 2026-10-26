@@ -29,6 +29,12 @@ setInterval(() => {
   app.locals.autoSync().catch((err) => console.error('Automatischer Bambu-Abgleich fehlgeschlagen:', err.message));
 }, AUTO_SYNC_MS).unref();
 
+// Sicherung: beim Start und dann stündlich prüfen, ob es die von heute schon gibt.
+// Plesk hält die App im Leerlauf an; dann sichert der nächste Start.
+const dailyBackup = () => app.locals.backups.daily().catch((err) => console.error('Sicherung fehlgeschlagen:', err.message));
+setTimeout(dailyBackup, 10 * 1000).unref();
+setInterval(dailyBackup, 60 * 60 * 1000).unref();
+
 // DHL-Sendungen: alle 30 Minuten nachsehen, welche wieder dran sind
 // (jede höchstens alle 3 Stunden), zuerst kurz nach dem Start.
 setTimeout(() => app.locals.tracker.checkDue(), 60 * 1000).unref();

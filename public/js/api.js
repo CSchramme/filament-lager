@@ -47,6 +47,8 @@ class ServerBackend {
   getApiKey() { return this.req('GET', 'api/schluessel').then((d) => d.key); }
   tasks() { return this.req('GET', 'api/drucke'); }
   refreshTasks() { return this.req('POST', 'api/drucke/aktualisieren', {}); }
+  bookTask(id) { return this.req('POST', 'api/drucke/' + encodeURIComponent(id) + '/abbuchen', {}); }
+  undoBooking(id) { return this.req('POST', 'api/drucke/' + encodeURIComponent(id) + '/rueckgaengig', {}); }
   sales() { return this.req('GET', 'api/verkaeufe'); }
   addSale(sale) { return this.req('POST', 'api/verkaeufe', sale); }
   updateSale(id, patch) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id), patch); }
@@ -68,6 +70,12 @@ class ServerBackend {
   updateExpense(id, x) { return this.req('PUT', 'api/ausgaben/' + encodeURIComponent(id), x); }
   deleteExpense(id) { return this.req('DELETE', 'api/ausgaben/' + encodeURIComponent(id)); }
   spoolArchive() { return this.req('GET', 'api/rollen-archiv'); }
+  share() { return this.req('GET', 'api/teilen'); }
+  backups() { return this.req('GET', 'api/sicherungen'); }
+  createBackup() { return this.req('POST', 'api/sicherungen', {}); }
+  restoreBackup(body) { return this.req('POST', 'api/sicherungen/zurueckholen', body); }
+  newShare() { return this.req('POST', 'api/teilen', {}); }
+  stopShare() { return this.req('DELETE', 'api/teilen'); }
   stock() { return this.req('GET', 'api/vorrat'); }
   addStock(item) { return this.req('POST', 'api/vorrat', item); }
   updateStock(id, patch) { return this.req('PUT', 'api/vorrat/' + encodeURIComponent(id), patch); }

@@ -29,7 +29,7 @@ export function renderYear(el, app, data) {
 function report() {
   const { app, data } = ctx;
   return computeYear({
-    year, sales: data.sales, spools: app.spools, archive: data.archive, powerPayments: data.powerPayments, expenses: data.expenses,
+    year, sales: data.sales, spools: app.spools, archive: data.archive, powerPayments: data.powerPayments, expenses: data.expenses, settings: app.settings,
   });
 }
 
@@ -81,8 +81,8 @@ function draw() {
       Ohne Umsatzsteuer geht es, solange der Umsatz im Vorjahr höchstens ${fmtEur(SMALL_BUSINESS.prev)} war und im laufenden Jahr ${fmtEur(SMALL_BUSINESS.current)} nicht übersteigt (Stand 2025).
       <div class="meter year-meter" data-level="${share > 0.8 ? 'knapp' : ''}" title="${Math.round(share * 100)} % von ${fmtEur(SMALL_BUSINESS.current)}"><span style="width:${Math.max(0.5, share * 100).toFixed(1)}%"></span></div>
     </div>
-    <p class="small muted">Filament zählt mit Kaufpreis und Kaufdatum der Rollen (im Lager unter „Bearbeiten“), auch von gelöschten Rollen. Filament aus dem Lager deshalb nicht noch einmal als Ausgabe eintragen.
-      ${r.unpriced ? `<strong>${plural(r.unpriced, 'Rolle', 'Rollen')} aus ${r.year} ohne Kaufpreis</strong> fehlen in den Ausgaben. ` : ''}Strom zählt, sobald eine Stromabrechnung gespeichert ist (Reiter „Drucke“), Porto aus den Versandpositionen der Belege.
+    <p class="small muted">Filament zählt mit Kaufpreis und Kaufdatum der Rollen (in der Rolle unter „Bearbeiten“), auch von gelöschten Rollen. Ohne eingetragenes Kaufdatum gilt der Tag, an dem die Rolle im Lager angelegt wurde; für Rollen aus der Excel-Übernahme bitte prüfen. Filament aus dem Lager nicht noch einmal als Ausgabe eintragen.
+      ${r.listed ? `${plural(r.listed, 'Rolle', 'Rollen')} ohne eigenen Kaufpreis mit dem Preis aus der Preisliste. ` : ''}${r.unpriced ? `<strong>${plural(r.unpriced, 'Rolle', 'Rollen')} aus ${r.year} ohne Preis</strong> fehlen in den Ausgaben. ` : ''}Strom zählt, sobald eine Stromabrechnung gespeichert ist (Reiter „Drucke“), Porto aus den Versandpositionen der Belege.
       Die Aufstellung ersetzt keine Steuerberatung; Belege und Kaufrechnungen aufheben.</p>`;
 }
 

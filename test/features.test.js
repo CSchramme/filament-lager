@@ -361,6 +361,12 @@ test('Jahresübersicht: Einnahmen, Filament, Strom, Porto und eigene Ausgaben', 
   assert.equal(r.spend, 58.88);
   assert.equal(r.result, -36.88);
   assert.equal(r.unpriced, 1);
+  // Mit Preisliste: die weiße PLA-Basic-Rolle ohne Preis zählt mit 19,99 €
+  const withList = computeYear({
+    year: 2026, sales, spools: [a, b, old], archive, powerPayments, expenses, settings,
+  });
+  assert.deepEqual([withList.listed, withList.unpriced, withList.byCategory[0].amount], [1, 0, 61.48]);
+  assert.match(withList.entries.find((e) => e.date === '2026-05-01').title, /Weiß \(Preis laut Preisliste\)$/);
   assert.equal(r.prevIncome, 30);
   assert.deepEqual([r.months[2].income, r.months[2].spend, r.months[1].spend], [14.5, 4.19, 19.99]);
   assert.match(r.entries.find((e) => e.category === 'Filament' && e.amount === 21.5).title, /^#9 .*Orange.*\(gelöscht\)$/);
@@ -371,4 +377,52 @@ test('Jahresübersicht: Einnahmen, Filament, Strom, Porto und eigene Ausgaben', 
   assert.ok(csv.startsWith('\ufeffDatum;Art;Kategorie;Beschreibung;Einnahme;Ausgabe\r\n'));
   assert.match(csv, /02\.03\.2026;Einnahme;Verkauf;Beleg 2026-001, Lisa Müller;14,50;\r\n/);
   assert.match(csv, /;Ergebnis;-36,88;\r\n$/);
+});
+
+test('Abbuchen bei Druckende: Rolle im Slot, einmal je Druck, rückgängig', async () => {
+  const {
+    bookTask, dueTasks, normalizeAutoBook, planBooking, undoBooking,
+  } = await import('../src/bambu/autobook.js');
+  const black = spool({ colorName: 'Schwarz', colorHex: '#000000', netWeight: 800, inAms: true, bambu: { slot: 'A1' } });
+  const green = spool({ colorName: 'Grün', colorHex: '#3F8E43', netWeight: 20, inAms: true, bambu: { slot: 'A2' } });
+  const white = spool({ colorName: 'Weiß', colorHex: '#FFFFFF', netWeight: 900, inAms: true, bambu: { slot: 'A3', cloudId: 502 } });
+  const lager = spool({ colorName: 'Rot', colorHex: '#C12E1F', netWeight: 1000 }); // nicht im AMS
+  black.nr = 1; green.nr = 2; white.nr = 3; lager.nr = 4;
+  const spools = [black, green, white, lager];
+  const task = {
+    id: '901', title: 'Schild', status: 2, startTime: '2026-10-26T09:00:00Z',
+    filaments: [
+      { slot: 'A1', color: '#000000', type: 'PLA', grams: 31.2 },
+      { slot: 'A2', color: '#3F8E43', type: 'PLA', grams: 25 }, // mehr als übrig: 0 statt negativ
+      { slot: 'A3', color: '#FFFFFF', type: 'PLA', grams: 8.4 }, // zählt Bambu selbst
+      { slot: 'A4', color: '#C12E1F', type: 'PLA', grams: 3 }, // rote Rolle liegt nicht im AMS
+    ],
+  };
+  const plan = planBooking(task, spools, { autoSync: true });
+  assert.deepEqual(plan.items.map((i) => [i.spoolId, i.grams]), [[black.id, 31.2], [green.id, 25]]);
+  assert.deepEqual(plan.skipped.map((x) => x.reason), ['zählt der Bambu Filament Manager', 'keine passende Rolle im AMS']);
+  // Ohne Abgleich mit dem Filament Manager wird auch die weiße Rolle gebucht
+  assert.equal(planBooking(task, spools, { autoSync: false }).items.length, 3);
+
+  const state = normalizeAutoBook({ since: '2026-10-26T08:00:00Z' });
+  const old = { ...task, id: '900', startTime: '2026-10-25T09:00:00Z' };
+  const failed = { ...task, id: '902', status: 3 };
+  assert.deepEqual(dueTasks(state, [old, task, failed]).map((t) => t.id), ['901']);
+
+  const entry = bookTask(state, task, spools, { autoSync: true }, '2026-10-26T12:00:00Z');
+  assert.deepEqual(entry.items.map((i) => [i.nr, i.grams, i.before, i.after]), [[1, 31.2, 800, 769], [2, 25, 20, 0]]);
+  assert.deepEqual([spools[0].netWeight, spools[1].netWeight, spools[2].netWeight, spools[0].opened], [769, 0, 900, true]);
+  assert.equal(bookTask(state, task, spools, { autoSync: true }), null); // nie doppelt
+  assert.deepEqual(dueTasks(state, [task]), []);
+
+  // Slot getauscht: die schwarze Rolle steckt jetzt in A4, gebucht wird nach Farbe
+  spools[0] = normalizeSpool({ bambu: { slot: 'A4' } }, { base: spools[0] });
+  const moved = bookTask(state, { ...task, id: '903', filaments: [{ slot: 'A1', color: '#000000', type: 'PLA', grams: 10 }] }, spools, {});
+  assert.deepEqual(moved.items.map((i) => [i.nr, i.after]), [[1, 759]]);
+
+  const undone = undoBooking(state, '901', spools);
+  assert.equal(undone.undone, true);
+  assert.deepEqual([spools[0].netWeight, spools[1].netWeight], [790, 20]); // grün: nur die 20 g, die da waren
+  assert.equal(undoBooking(state, '901', spools), null);
+  assert.deepEqual(dueTasks(state, [task]), []); // bleibt gebucht
 });

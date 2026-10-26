@@ -23,9 +23,14 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
   dem Löschen nicht neu vergeben wird. Gut zum Aufschreiben auf die Spule; die Suche findet `#12`.
 - **Rechner**: STL oder 3MF hochladen, Rolle wählen, Preis mit Filament, Strom, Drucker,
   Fehldrucken, Arbeit und Gewinn ablesen (siehe unten).
-- **Drucke**: Belege mit der Aufteilung des Preises pro Teil, Angebote, die mit einem Klick zum
-  Beleg werden, Umsatz und Gewinn, Stromabrechnung für den, der den Strom bezahlt, und der
-  Druckverlauf von Bambu mit Kosten je Druck.
+- **Verkauf**: Belege mit der Aufteilung des Preises pro Teil, Angebote, die mit einem Klick zum
+  Beleg werden, Kundenliste, Versand als feste Position und **DHL-Sendungsverfolgung** mit der
+  Sendungsnummer.
+- **Schöne Preise**: Preis pro Teil aufrunden (z. B. auf 0,50 €) und **Mengenrabatt** ab einer
+  Stückzahl.
+- **Drucke**: Stromabrechnung für den, der den Strom bezahlt, mit einem **Link nur zum Ansehen**
+  (z. B. für Papa), und der Druckverlauf von Bambu mit Kosten je Druck. Fertige Drucke werden auf
+  Wunsch **automatisch von der Rolle abgebucht**.
 - **Preisliste**: Einkaufspreis je Filamentart (PLA Basic 19,99 €), gilt für neue Rollen und Rollen
   ohne eigenen Preis; Filamentart im Spulen-Dialog als Auswahl mit Suche.
 - **Vorrat**: mehrere gleiche Teile auf einmal drucken (z. B. 25 Kürbisse) und einzeln verkaufen;
@@ -34,14 +39,17 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
   Rolle direkt zum Wiegen.
 - **Einkaufsliste**: was knapp ist und keinen Ersatz im Lager hat, mit dem zuletzt bezahlten Preis.
 - **Benachrichtigungen aufs Handy** (App ntfy): Druck fertig, abgebrochen oder pausiert, Rolle
-  wird knapp.
+  wird knapp, Paket zugestellt.
 - **Auswertung**: Umsatz und Gewinn pro Monat, Filamentverbrauch pro Monat und nach Farbe,
-  Bestseller, Strom und Lagerwert.
+  Bestseller, Strom und Lagerwert, dazu die **Jahresübersicht für die Steuer** (Einnahmen,
+  Ausgaben, Ergebnis, § 19 UStG, CSV und PDF).
+- **Automatische Sicherung** jeden Tag auf dem Server, zum Herunterladen und Zurückholen.
 - **API** zum Abrufen: Bestand je Farbe, Material und Platz, einzelne Rollen über ihre Nummer,
   AMS-Belegung (siehe unten).
 - Suchen, filtern (im AMS, geöffnet, ungeöffnet, knapp) und sortieren.
 - Spulen anlegen (auch mehrere gleiche auf einmal), bearbeiten, duplizieren, löschen.
-- **Import/Export**: CSV im Excel-Format (Semikolon, deutsche Spaltennamen) und JSON-Sicherung.
+- **Import/Export**: CSV im Excel-Format (Semikolon, deutsche Spaltennamen) und JSON-Sicherung des
+  ganzen Lagers.
 - **Bambu Filament Manager (Cloud)**: wird automatisch abgeglichen, alle 10 Minuten und beim
   Öffnen der Seite. Neue Spulen aus Bambu Studio/Handy kommen ins Lager, gleiche Spulen werden
   über RFID, Cloud-ID oder gleiche Merkmale (Hersteller, Material, ähnliche Farbe, Kaufgewicht)
@@ -132,7 +140,8 @@ Wichtig:
   Internet den Bestand ändern oder die Bambu-Anmeldung nutzen kann. Nach 10
   Fehlversuchen sperrt die Anmeldung eine Adresse für 15 Minuten.
 - Die Daten liegen in `/filament-lager/data/lager.json`, außerhalb des Dokumentstamms und damit
-  nicht direkt abrufbar. Plesk-Backups sichern sie mit.
+  nicht direkt abrufbar. Die App sichert sie jeden Tag nach `data/backups/` (siehe
+  „Sicherungen“); Plesk-Backups sichern beides mit.
 - **Bambu Filament Manager** (Cloud) funktioniert auch vom Webserver aus, sofern der Hoster
   ausgehende Verbindungen erlaubt.
 - **AMS live** läuft auf dem Webserver über das Bambu-Konto. Eine IP-Adresse des Druckers wird
@@ -246,14 +255,19 @@ aus dem Lager wählen und den Preis ablesen:
 | Arbeit | Arbeitszeit pro Auftrag × Stundenlohn, geteilt durch die Stückzahl | 5 Min. × 15 € pro Stunde |
 | Selbstkosten | Summe der Posten oben | |
 | Gewinn | Aufschlag auf die Selbstkosten | 30 % |
-| **Preis pro Stück** | Selbstkosten + Gewinn | |
-| Mindestpreis | gilt für den ganzen Beleg, darunter kommt ein Aufschlag dazu | 3 € |
+| Mengenrabatt | ab so vielen gleichen Teilen in einer Position, nie unter die Selbstkosten | 10 % ab 10 Stück |
+| Aufrunden | Preis pro Stück auf einen schönen Betrag | auf 0,50 € |
+| **Preis pro Stück** | Selbstkosten + Gewinn − Rabatt, aufgerundet | |
+| Mindestpreis | gilt für den ganzen Beleg (ohne Versand), darunter kommt ein Aufschlag dazu | 3 € |
 
 Beispiel Kabelhalter, 31,2 g zu 2 ct, 1:24 Std.: Filament 0,62 € + Strom 0,05 € + Drucker 0,42 € +
-Fehldrucke 0,07 € + Arbeit 1,25 € = 2,41 € Selbstkosten, dazu 0,72 € Gewinn, also **3,13 €**. Bei
-drei Stück verteilt sich die Arbeit, dann kostet eines 2,05 €.
+Fehldrucke 0,07 € + Arbeit 1,25 € = 2,41 € Selbstkosten, dazu 0,72 € Gewinn, also 3,13 €,
+aufgerundet **3,50 €**. Bei drei Stück verteilt sich die Arbeit, dann kostet eines 2,05 €,
+aufgerundet 2,50 €. Rabatt und Aufrunden stehen im Rechner als eigene Zeilen, darunter der Gewinn
+pro Stück nach allem; das Aufrunden erhöht nur den Gewinn.
 
-Alle Werte stehen unter **Einstellungen → Preisrechnung**. Arbeitszeit und Gewinn lassen sich im
+Alle Werte stehen unter **Einstellungen → Preisrechnung** („Preis pro Teil aufrunden auf“: nicht,
+0,10 €, 0,50 € oder 1,00 €; „Mengenrabatt ab“ und „Mengenrabatt (%)“, 0 % schaltet ihn ab). Arbeitszeit und Gewinn lassen sich im
 Rechner für die einzelne Rechnung ändern. Jeder Posten wird auf Cent gerundet, damit die Beträge
 auf dem Beleg genau aufgehen.
 
@@ -283,36 +297,89 @@ auf dem Beleg genau aufgehen.
   Text mit Modell, Farbe und Preis in die Zwischenablage. „Zum Beleg hinzufügen“ legt das Teil in
   den offenen Beleg.
 
-## Belege, Strom und Druckverlauf
+## Verkauf: Belege, Angebote, Kunden, Versand
 
-Unter **Drucke**:
+Unter **Verkauf**:
 
-- **Offener Beleg**: sammelt Teile aus dem Rechner und dem Druckverlauf („Zum Beleg“). Anzahl und
-  Preis pro Stück lassen sich ändern (ein eigener Preis ändert nur den Gewinn), „Position von
-  Hand“ fügt z. B. Versand hinzu. Mit Datum, Kunde und Notiz wird daraus mit „Beleg erstellen“ ein
-  Beleg mit fester Nummer (2026-001, 2026-002, …). Der offene Beleg bleibt im Browser, bis er
-  erstellt wird.
+- **Offener Beleg**: sammelt Teile aus dem Rechner, dem Druckverlauf („Zum Beleg“) und dem Vorrat.
+  Anzahl und Preis pro Stück lassen sich ändern (ein eigener Preis ändert nur den Gewinn),
+  „Position von Hand“ fügt z. B. eine Reparatur hinzu. Mit Datum, Kunde und Notiz wird daraus mit
+  „Beleg erstellen“ ein Beleg mit fester Nummer (2026-001, 2026-002, …). Der offene Beleg bleibt im
+  Browser, bis er erstellt wird.
+- **Versand**: Der Knopf „Versand“ fügt die Versandkosten als feste Position hinzu: DHL Päckchen
+  4,50 €, DHL Paket 6,50 € oder ein anderer Betrag. Zu jeder Versandart gehört das Porto, das du
+  selbst zahlst; es zählt als Kosten des Belegs und in der Jahresübersicht als Ausgabe. Versand
+  zählt nicht zum Mindestpreis. Versandarten, Preise und Porto stehen unter **Einstellungen →
+  Versandarten**.
 - **Angebot**: „Als Angebot speichern“ macht aus dem offenen Beleg ein Angebot mit eigener Nummer
   (A-2026-001, …) und „gültig bis“ (14 Tage, unter Einstellungen änderbar), zum Drucken oder als
   PDF. Sagt der Kunde zu, macht „Beleg“ in der Angebotsliste daraus mit einem Klick einen Beleg mit
   denselben Preisen; der Beleg nennt das Angebot.
 - **Beleg**: öffnet sich in einem neuen Fenster zum Drucken oder „Als PDF sichern“. Unter jeder
   Position steht die Aufteilung pro Teil und für alle Stück: Filament, Strom, Drucker, Fehldrucke,
-  Arbeit, Selbstkosten, Gewinn. Name und Adresse für den Beleg und den Hinweis für
-  Kleinunternehmer (§ 19 UStG) gibt es unter Einstellungen → Beleg und Strom. Alte Belege öffnen
-  sich durch Antippen in der Liste; Umsatz und Gewinn stehen darüber.
+  Arbeit, Selbstkosten, Gewinn (mit Hinweis auf den Mengenrabatt). Name und Adresse für den Beleg
+  und den Hinweis für Kleinunternehmer (§ 19 UStG) gibt es unter Einstellungen → Beleg, Angebot und Strom.
+  Alte Belege öffnen sich durch Antippen in der Liste; Umsatz und Gewinn stehen darüber.
+- **Kunden**: Wer im offenen Beleg als Kunde eingetragen wird, landet beim Erstellen in der
+  Kundenliste; beim nächsten Mal reicht es, den Namen anzutippen. Adresse, E-Mail und Telefon
+  lassen sich ergänzen, die Liste zeigt die Belege jedes Kunden. „Neuer Beleg“ setzt den Kunden in
+  den offenen Beleg.
+
+### DHL-Sendungsverfolgung
+
+Die **Sendungsnummer** trägst du im Versand-Dialog ein, im offenen Beleg oder später über den
+Lkw-Knopf am Beleg. Sie steht auf dem Beleg mit Link zu dhl.de; im Dialog gibt es „Auf dhl.de
+verfolgen“ und „Link für den Kunden kopieren“.
+
+Mit einem **kostenlosen DHL-API-Schlüssel** zeigt das Lager den Stand selbst an (angekündigt,
+unterwegs, zugestellt, mit Ort und Verlauf) und meldet die Zustellung aufs Handy:
+
+1. Auf [developer.dhl.com](https://developer.dhl.com) registrieren.
+2. Unter „My Apps“ eine App anlegen und die API **„Shipment Tracking - Unified“** wählen.
+3. Den **API Key** der App unter **Einstellungen → Sendungsverfolgung (DHL)** eintragen (das API
+   Secret wird nicht gebraucht). Der Schlüssel bleibt auf dem Server.
+
+Der Server fragt jede offene Sendung höchstens alle 3 Stunden ab (kostenlos sind 250 Abfragen am
+Tag), solange die App läuft, und beim Öffnen von „Verkauf“; zugestellte Sendungen und solche, die
+älter als 45 Tage sind, nicht mehr. „Jetzt bei DHL nachsehen“ fragt sofort. Ohne Schlüssel gibt es
+den Link zu dhl.de.
+
+## Strom und Druckverlauf
+
+Unter **Drucke**:
+
 - **Strom für Papa**: Wer den Strom bezahlt (Name unter Einstellungen), bekommt den Strom aller
   Drucke seit der letzten Abrechnung, auch für abgebrochene und eigene Drucke. Gerechnet wird aus
   dem Bambu-Druckverlauf (Druckzeit × Watt × Strompreis); ohne Bambu-Anmeldung aus den Belegen.
   „Abrechnung ansehen“ zeigt eine druckbare Aufstellung mit Unterschriftszeilen, „… an Papa
   gegeben“ speichert die Abrechnung, danach beginnt die nächste. Gezählt wird nur die Zeit beim
   Drucken, nicht der Standby.
+- **Link für Papa**: erstellt einen geheimen Link (mit QR-Code) zur Seite `strom.html`. Damit sieht
+  Papa ohne Passwort den offenen Betrag, die Drucke seit der letzten Abrechnung, alle bisherigen
+  Abrechnungen und ob der Drucker gerade druckt. Ändern kann er nichts, Kunden, Belege und das
+  Lager bleiben verborgen. „Neuer Link“ macht den alten ungültig, „Link zurückziehen“ sperrt ihn.
 - **Druckverlauf** aus dem Bambu-Konto (wird mit dem automatischen Abgleich geholt,
   „Aktualisieren“ holt ihn sofort): Titelbild, Datum, Drucker, Gramm, Druckzeit, die verwendeten
   Farben mit der passenden Lagerrolle und der Preis, bei mehrfarbigen Drucken je Farbe mit dem
   Kaufpreis der passenden Rolle. **Im Rechner** übernimmt Gramm, Druckzeit und Farbe in den
   Rechner. **Erneut drucken**: Einen Druck starten erlaubt Bambu nur in den eigenen Apps. Die App
   zeigt den Weg über Bambu Handy und verlinkt das Modell auf MakerWorld, wenn es von dort stammt.
+
+### Filament bei Druckende abbuchen
+
+Unter **Bambu → AMS live** „Filament bei Druckende abbuchen“ einschalten. Nach jedem fertigen Druck
+zieht das Lager die Gramm je AMS-Slot von der Rolle ab, die in diesem Slot steckt (passt die Farbe
+dort nicht mehr, von der Rolle im AMS mit derselben Farbe). Das gilt für Drucke, die nach dem
+Einschalten beginnen. Das Lager holt den Druckverlauf kurz nach dem Druckende von Bambu; läuft die
+App gerade nicht (Plesk hält sie im Leerlauf an), passiert es beim nächsten Öffnen.
+
+Nicht abgezogen wird, was schon anders gezählt wird: Rollen, die mit dem **Bambu Filament Manager**
+verknüpft sind, solange der automatische Abgleich an ist (dort zieht Bambu selbst ab), und
+RFID-Rollen, wenn „Restgewicht aus dem AMS übernehmen“ an ist. Abgebrochene Drucke bucht das Lager
+nicht, weil Bambu dafür das geplante statt des verbrauchten Gewichts meldet.
+
+Jede Druckkarte zeigt, was abgebucht wurde (z. B. „#6 −31 g“), mit **Rückgängig**. „Filament
+abbuchen“ bucht einen Druck von Hand, auch ohne den Schalter. Kein Druck wird doppelt gebucht.
 
 Den Druckverlauf liefert die inoffizielle Bambu-Schnittstelle (`/v1/user-service/my/tasks`); bekannt
 sind die Status „fertig“ und „abgebrochen“.
@@ -350,7 +417,7 @@ Platte:
    oder im **Druckverlauf** bei dem Druck „Auf Vorrat“ und angeben, wie viele Teile auf der Platte
    waren. Gramm und Druckzeit werden dann auf die Teile verteilt. Im Dialog den festen
    **Verkaufspreis pro Stück** eintragen; Selbstkosten und Gewinn pro Stück stehen darunter.
-2. **Verkaufen**: unter **Drucke → Vorrat** bei dem Teil auf „Verkaufen“. Anzahl, Preis, Datum und
+2. **Verkaufen**: unter **Verkauf → Vorrat** bei dem Teil auf „Verkaufen“. Anzahl, Preis, Datum und
    Kunde, dann „Verkauft“: Das speichert gleich einen Beleg (auf Wunsch zum Drucken) und zieht die
    Teile vom Vorrat ab. „In den offenen Beleg“ legt sie stattdessen zu anderen Positionen.
 3. Der Vorrat zeigt, wie viele noch da sind. Ein gelöschter Beleg bringt die Teile zurück. Über
@@ -370,8 +437,8 @@ Beispiel Kürbis, 12 g und 6 Std. für die ganze Platte:
 
 Teile aus dem Vorrat haben einen festen Preis, deshalb gilt für sie kein Mindestpreis. Druckst
 du dasselbe Teil noch einmal (gleicher Name), kommt die neue Menge dazu und die Kosten werden
-gemittelt. Das Filament zieht der Bambu-Abgleich ab; im Rechner lässt es sich beim Anlegen auch
-von Hand abziehen.
+gemittelt. Das Filament zieht der Bambu-Abgleich oder das automatische Abbuchen ab; im Rechner
+lässt es sich beim Anlegen auch von Hand abziehen.
 
 ## Etiketten mit QR-Code
 
@@ -408,7 +475,8 @@ Android:
 3. „Benachrichtigungen einschalten“, speichern und „Testnachricht senden“.
 
 Gemeldet werden: **Druck fertig**, **Druck abgebrochen**, **Druck pausiert** (z. B. Filament leer
-oder ein Fehler am Drucker) und **Rolle wird knapp oder leer**, jedes einzeln abschaltbar. Die
+oder ein Fehler am Drucker), **Rolle wird knapp oder leer** und **Paket zugestellt** (mit
+DHL-API-Schlüssel, siehe Sendungsverfolgung), jedes einzeln abschaltbar. Die
 Druckmeldungen brauchen eine Verbindung zum Drucker (Bambu-Konto oder Heimnetz unter „Bambu“).
 Eine knappe Rolle meldet sich nur einmal, erst nach dem Auffüllen wieder; was beim Einschalten schon
 knapp ist, wird nicht nachgemeldet. Tippen auf die Nachricht öffnet das Lager.
@@ -430,6 +498,46 @@ Der Reiter **Auswertung** zeigt für einen Zeitraum (letzte 6 oder 12 Monate, di
 - **Bestseller** nach Umsatz, mit Stück und Gewinn (Positionen von Hand wie Versand zählen nicht)
 
 Überfahren oder Antippen zeigt die Werte, „Als Tabelle“ zeigt alle Zahlen zum Nachlesen.
+
+### Jahresübersicht für die Steuer
+
+Darunter steht die **Jahresübersicht** für ein Kalenderjahr (Auswahl oben links), unabhängig vom
+Zeitraum der Diagramme:
+
+- **Einnahmen**: alle Belege des Jahres.
+- **Ausgaben**: **Filament** mit Kaufpreis und Kaufdatum jeder Rolle (auch gelöschter Rollen mit
+  Kaufpreis; ohne eigenen Preis mit dem Preis aus der Preisliste, so gekennzeichnet), **Strom**
+  aus den gespeicherten Stromabrechnungen, **Porto** aus den Versandpositionen der Belege und
+  **eigene Ausgaben** wie Düsen, Druckplatten, Werkzeug oder Verpackung („Ausgabe“).
+- **Ergebnis** (Einnahmen minus Ausgaben), alles auch **pro Monat** und **nach Art**.
+- **Kleinunternehmer (§ 19 UStG)**: Umsatz des Jahres und des Vorjahres neben den Grenzen von
+  25.000 € (Vorjahr) und 100.000 € (laufendes Jahr), Stand 2025.
+- **CSV für Excel** (eine Zeile pro Einnahme oder Ausgabe) und **Drucken oder PDF** für die
+  Steuererklärung oder den Steuerberater.
+
+Das **Kaufdatum** einer Rolle steht im Bearbeiten-Dialog; neue Rollen bekommen den heutigen Tag.
+Ohne Eintrag gilt der Tag, an dem die Rolle angelegt wurde. Bei den Rollen aus der Excel-Übernahme
+deshalb das Kaufdatum prüfen. Filament aus dem Lager nicht zusätzlich als Ausgabe eintragen, sonst
+zählt es doppelt. Die Übersicht ist eine geordnete Aufstellung, keine Steuerberatung; Kaufbelege
+aufheben.
+
+## Sicherungen
+
+Auf dem Server sichert die App **jeden Tag automatisch** das ganze Lager (Rollen, Belege, Angebote,
+Kunden, Vorrat, Ausgaben, Druckverlauf, Einstellungen) nach `data/backups/lager-JJJJ-MM-TT.json`,
+beim Start und danach stündlich geprüft. Die letzten 14 Tage bleiben, ältere werden gelöscht.
+
+Unter **Einstellungen → Daten**:
+
+- **Ganzes Lager sichern (JSON)** lädt den aktuellen Stand herunter.
+- **Automatische Sicherungen**: Liste mit Datum, „Herunterladen“ und **Zurückholen**. „Jetzt
+  sichern“ legt sofort eine an.
+- **Sicherung aus einer Datei zurückholen**: eine heruntergeladene Sicherung wieder einspielen.
+
+Heruntergeladene Sicherungen enthalten keine Passwörter und Schlüssel (Bambu-Anmeldung,
+Zugangscodes, ntfy-Token, DHL- und API-Schlüssel, Link für Papa). Beim Zurückholen bleiben diese
+Zugänge, wie sie gerade sind, und vorher wird der aktuelle Stand gesichert, falls es doch der
+falsche war.
 
 ## API
 

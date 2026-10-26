@@ -7,6 +7,7 @@ import {
   normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
+import { normalizeAutoBook } from './bambu/autobook.js';
 import { normalizeDhl } from './dhl.js';
 import { normalizeNotify } from './notify.js';
 
@@ -18,8 +19,53 @@ function emptyBambu() {
     },
     printers: [],
     // autoSync: Filament Manager automatisch holen, cloudAms: AMS über die Bambu Cloud
-    options: { autoAms: true, amsWeights: false, autoSync: true, cloudAms: true },
+    // autoBook: Filament bei Druckende abbuchen
+    options: {
+      autoAms: true, amsWeights: false, autoSync: true, cloudAms: true, autoBook: false,
+    },
   };
+}
+
+// Bereiche, die beim Zurückholen einer Sicherung nicht ersetzt werden
+export const SECRET_KEYS = ['bambu', 'notify', 'dhl', 'apiKey', 'share'];
+
+// Baut den Datenstand aus einer gelesenen Datei oder Sicherung.
+export function dataFromRaw(raw) {
+  const bambu = emptyBambu();
+  const src = raw.bambu || {};
+  const data = {
+    version: 1,
+    settings: normalizeSettings(raw.settings),
+    spools: (raw.spools || []).map((s) => normalizeSpool(s, { keepTimestamps: true })),
+    bambu: {
+      cloud: { ...bambu.cloud, ...(src.cloud || {}) },
+      printers: Array.isArray(src.printers) ? src.printers : [],
+      options: { ...bambu.options, ...(src.options || {}) },
+    },
+  };
+  delete data.bambu.options.autoPull; // ersetzt durch autoSync
+  data.nextNr = raw.nextNr;
+  data.apiKey = raw.apiKey || '';
+  data.tasks = Array.isArray(raw.tasks) ? raw.tasks : [];
+  data.sales = (Array.isArray(raw.sales) ? raw.sales : []).map((x) => normalizeSale(x));
+  data.receiptSeq = raw.receiptSeq || {};
+  // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
+  for (const sale of [...data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(data, sale.date);
+  data.powerPayments = (Array.isArray(raw.powerPayments) ? raw.powerPayments : []).map((x) => normalizePowerPayment(x));
+  data.offers = (Array.isArray(raw.offers) ? raw.offers : []).map((x) => normalizeOffer(x));
+  data.offerSeq = raw.offerSeq || {};
+  data.notify = normalizeNotify(raw.notify);
+  data.stock = (Array.isArray(raw.stock) ? raw.stock : []).map((x) => normalizeStockItem(x, { now: x.updatedAt }));
+  data.customers = (Array.isArray(raw.customers) ? raw.customers : []).map((x) => normalizeCustomer(x));
+  data.expenses = (Array.isArray(raw.expenses) ? raw.expenses : []).map((x) => normalizeExpense(x));
+  data.dhl = normalizeDhl(raw.dhl);
+  data.spoolArchive = (Array.isArray(raw.spoolArchive) ? raw.spoolArchive : []).map((x) => normalizeArchivedSpool(x));
+  data.share = { token: String((raw.share && raw.share.token) || ''), createdAt: String((raw.share && raw.share.createdAt) || '') };
+  data.autoBook = normalizeAutoBook(raw.autoBook);
+  assignNumbers(data);
+  data.settings.places = placeList(data.settings, data.spools);
+  const migrated = migratePriceList(raw.settings, data);
+  return { data, migrated };
 }
 
 export class Store {
@@ -38,45 +84,27 @@ export class Store {
       if (err.code !== 'ENOENT') throw new Error(`Datei ${this.file} kann nicht gelesen werden: ${err.message}`);
     }
     if (raw) {
-      const bambu = emptyBambu();
-      const src = raw.bambu || {};
-      this.data = {
-        version: 1,
-        settings: normalizeSettings(raw.settings),
-        spools: (raw.spools || []).map((s) => normalizeSpool(s, { keepTimestamps: true })),
-        bambu: {
-          cloud: { ...bambu.cloud, ...(src.cloud || {}) },
-          printers: Array.isArray(src.printers) ? src.printers : [],
-          options: { ...bambu.options, ...(src.options || {}) },
-        },
-      };
-      delete this.data.bambu.options.autoPull; // ersetzt durch autoSync
-      this.data.nextNr = raw.nextNr;
-      this.data.apiKey = raw.apiKey || '';
-      this.data.tasks = Array.isArray(raw.tasks) ? raw.tasks : [];
-      this.data.sales = (Array.isArray(raw.sales) ? raw.sales : []).map((x) => normalizeSale(x));
-      this.data.receiptSeq = raw.receiptSeq || {};
-      // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
-      for (const sale of [...this.data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(this.data, sale.date);
-      this.data.powerPayments = (Array.isArray(raw.powerPayments) ? raw.powerPayments : []).map((x) => normalizePowerPayment(x));
-      this.data.offers = (Array.isArray(raw.offers) ? raw.offers : []).map((x) => normalizeOffer(x));
-      this.data.offerSeq = raw.offerSeq || {};
-      this.data.notify = normalizeNotify(raw.notify);
-      this.data.stock = (Array.isArray(raw.stock) ? raw.stock : []).map((x) => normalizeStockItem(x, { now: x.updatedAt }));
-      this.data.customers = (Array.isArray(raw.customers) ? raw.customers : []).map((x) => normalizeCustomer(x));
-      this.data.expenses = (Array.isArray(raw.expenses) ? raw.expenses : []).map((x) => normalizeExpense(x));
-      this.data.dhl = normalizeDhl(raw.dhl);
-      this.data.spoolArchive = (Array.isArray(raw.spoolArchive) ? raw.spoolArchive : []).map((x) => normalizeArchivedSpool(x));
-      assignNumbers(this.data);
-      this.data.settings.places = placeList(this.data.settings, this.data.spools);
-      if (migratePriceList(raw.settings, this.data)) await this.save();
+      const { data, migrated } = dataFromRaw(raw);
+      this.data = data;
+      if (migrated) await this.save();
     } else {
       this.data = {
         version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '', tasks: [], sales: [], receiptSeq: {}, powerPayments: [],
-        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [], customers: [], expenses: [], dhl: normalizeDhl(), spoolArchive: [],
+        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [], customers: [], expenses: [], dhl: normalizeDhl(), spoolArchive: [], share: { token: '', createdAt: '' }, autoBook: normalizeAutoBook(),
       };
       await this.save();
     }
+    return this.data;
+  }
+
+  // Sicherung zurückholen. Zugänge (Bambu, ntfy, DHL, API-Schlüssel, Link für
+  // die Strom-Ansicht) bleiben, wie sie jetzt sind: Sicherungen zum
+  // Herunterladen enthalten sie nicht, und alte sollen keine neuen überschreiben.
+  async replace(raw) {
+    const { data } = dataFromRaw(raw);
+    for (const k of SECRET_KEYS) data[k] = this.data[k];
+    this.data = data;
+    await this.save();
     return this.data;
   }
 

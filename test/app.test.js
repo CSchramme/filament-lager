@@ -581,3 +581,123 @@ test('DHL-Sendungsverfolgung: Nummer am Beleg, Stand abfragen, Zustellung melden
   assert.equal((await call('PUT', '/api/dhl', { remove: true })).body.hasKey, false);
   await call('PUT', '/api/benachrichtigungen', { enabled: false });
 });
+
+test('Link nur zum Ansehen: Strom ohne Anmeldung, nichts anderes', async () => {
+  const view = (token) => fetch(base + '/api/strom-ansicht', { headers: token ? { 'X-Zugang': token } : {} });
+  assert.equal((await view()).status, 403);
+  assert.equal((await call('GET', '/api/teilen')).body.token, '');
+  const { body: share } = await call('POST', '/api/teilen', {});
+  assert.match(share.token, /^[A-Za-z0-9_-]{24}$/);
+  assert.equal((await view('falsch')).status, 403);
+  const res = await view(share.token);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+  const d = await res.json();
+  assert.equal(d.payee, 'Papa');
+  assert.ok(Array.isArray(d.power.rows) && Array.isArray(d.payments));
+  for (const k of ['sales', 'customers', 'spools', 'settings', 'stock']) assert.equal(k in d, false);
+
+  // Mit Passwort: alles andere gesperrt, der Link geht trotzdem
+  const store = new Store(path.join(dir, 'lager.json'));
+  await store.load();
+  const locked = createApp({ store, printers: null, publicDir: path.join(root, 'public'), password: 'geheim' });
+  const srv = await new Promise((resolve) => { const s = locked.listen(0, '127.0.0.1', () => resolve(s)); });
+  const url = `http://127.0.0.1:${srv.address().port}`;
+  assert.equal((await fetch(url + '/api/state')).status, 401);
+  assert.equal((await fetch(url + '/api/teilen')).status, 401);
+  assert.equal((await fetch(url + '/api/strom-ansicht', { headers: { 'X-Zugang': share.token } })).status, 200);
+  srv.close();
+
+  // Neuer Link macht den alten ungültig, zurückziehen sperrt
+  const { body: next } = await call('POST', '/api/teilen', {});
+  assert.notEqual(next.token, share.token);
+  assert.equal((await view(share.token)).status, 403);
+  assert.equal((await call('DELETE', '/api/teilen')).body.token, '');
+  assert.equal((await view(next.token)).status, 403);
+  assert.equal((await fetch(base + '/strom.html')).status, 200);
+});
+
+test('Sicherungen: täglich, von Hand, herunterladen ohne Zugänge, zurückholen', async () => {
+  // Zugänge setzen, die in keiner heruntergeladenen Sicherung stehen dürfen
+  await call('PUT', '/api/dhl', { apiKey: 'dhl-geheim-123' });
+  const { body: share } = await call('POST', '/api/teilen', {});
+  const state = (await call('GET', '/api/state')).body;
+  const spoolCount = state.spools.length;
+
+  const made = await call('POST', '/api/sicherungen', {});
+  assert.equal(made.status, 201);
+  assert.match(made.body.name, /^lager-\d{4}-\d{2}-\d{2}-\d{6}-manuell\.json$/);
+  assert.equal(made.body.backups[0].kind, 'manuell');
+  const onDisk = JSON.parse(await fs.readFile(path.join(dir, 'backups', made.body.name), 'utf8'));
+  assert.equal(onDisk.dhl.apiKey, 'dhl-geheim-123'); // auf dem Server vollständig
+
+  const dl = await fetch(`${base}/api/sicherungen/${made.body.name}`);
+  assert.equal(dl.status, 200);
+  assert.match(dl.headers.get('content-disposition'), /attachment/);
+  const text = await dl.text();
+  for (const secret of ['dhl-geheim-123', share.token]) assert.equal(text.includes(secret), false);
+  const now = await (await fetch(`${base}/api/sicherungen/aktuell`)).json();
+  assert.equal(now.spools.length, spoolCount);
+  assert.equal(JSON.stringify(now).includes('dhl-geheim-123'), false);
+  assert.equal((await fetch(`${base}/api/sicherungen/..%2Flager.json`)).status, 404);
+
+  // Etwas ändern, dann die Sicherung zurückholen
+  const victim = state.spools[0];
+  await call('DELETE', '/api/spools/' + victim.id);
+  assert.equal((await call('GET', '/api/state')).body.spools.length, spoolCount - 1);
+  assert.equal((await call('POST', '/api/sicherungen/zurueckholen', { data: { spools: [], settings: {} } })).status, 400); // nur Spulen: Import
+  const back = await call('POST', '/api/sicherungen/zurueckholen', { name: made.body.name });
+  assert.equal(back.status, 200);
+  assert.match(back.body.before, /vor-wiederherstellen/);
+  assert.equal((await call('GET', '/api/state')).body.spools.length, spoolCount);
+  // Zugänge bleiben wie vor dem Zurückholen
+  assert.equal((await call('GET', '/api/dhl')).body.hasKey, true);
+  assert.equal((await call('GET', '/api/teilen')).body.token, share.token);
+
+  // Aus einer heruntergeladenen Datei (ohne Zugänge) zurückholen: Zugänge bleiben
+  const fromFile = await call('POST', '/api/sicherungen/zurueckholen', { data: JSON.parse(text) });
+  assert.equal(fromFile.status, 200);
+  assert.equal((await call('GET', '/api/dhl')).body.hasKey, true);
+
+  // Tägliche Sicherung nur einmal am Tag
+  const { Backups } = await import('../src/backup.js');
+  const store = new Store(path.join(dir, 'lager.json'));
+  await store.load();
+  const b = new Backups({ store, dir: path.join(dir, 'b2'), now: () => new Date('2026-10-26T08:00:00') });
+  assert.equal(await b.daily(), 'lager-2026-10-26.json');
+  assert.equal(await b.daily(), null);
+  for (let i = 1; i <= 20; i += 1) {
+    b.now = () => new Date(2026, 10, i, 8);
+    await b.daily();
+  }
+  const list = await b.list();
+  assert.equal(list.length, 14);
+  assert.equal(list[0].name, 'lager-2026-11-20.json');
+
+  await call('PUT', '/api/dhl', { remove: true });
+  await call('DELETE', '/api/teilen');
+});
+
+test('Filament abbuchen: Schalter, von Hand je Druck, rückgängig', async () => {
+  await call('POST', '/api/drucke/aktualisieren', {});
+  const st = (await call('GET', '/api/state')).body;
+  const a1 = st.spools.find((s) => s.inAms && s.bambu.slot === 'A1');
+  assert.ok(a1, 'eine Rolle steckt in A1');
+  const before = a1.netWeight;
+  const opt = await call('PUT', '/api/bambu/options', { autoBook: true });
+  assert.equal(opt.body.options.autoBook, true);
+  const tasks = (await call('GET', '/api/drucke')).body;
+  assert.equal(tasks.autoBook, true);
+  assert.equal(tasks.bookings['7'], undefined); // älter als das Einschalten: nicht automatisch
+  const booked = await call('POST', '/api/drucke/7/abbuchen', {});
+  assert.equal(booked.status, 200);
+  assert.deepEqual(booked.body.entry.items.map((i) => [i.spoolId, i.grams]), [[a1.id, 12.5]]);
+  assert.equal(booked.body.spools.find((s) => s.id === a1.id).netWeight, Math.round(before - 12.5));
+  assert.equal(booked.body.bookings['7'].undone, false);
+  assert.equal((await call('POST', '/api/drucke/7/abbuchen', {})).status, 409);
+  const undone = await call('POST', '/api/drucke/7/rueckgaengig', {});
+  assert.equal(undone.body.spools.find((s) => s.id === a1.id).netWeight, before);
+  assert.equal((await call('POST', '/api/drucke/7/rueckgaengig', {})).status, 409);
+  assert.equal((await call('POST', '/api/drucke/fehlt/abbuchen', {})).status, 404);
+  await call('PUT', '/api/bambu/options', { autoBook: false });
+});

@@ -2,7 +2,7 @@
 // Filamentverbrauch pro Monat und nach Farbe aus dem Bambu-Druckverlauf
 // (ohne Verlauf aus den Belegen), Bestseller und Strom.
 import {
-  colorNameFor, energyCost, energyKwh, matchSpool, priceSource, stockValue,
+  colorNameFor, energyCost, energyKwh, listPrice, listPriceForWeight, matchSpool, priceSource, stockValue,
 } from './domain.js';
 
 const cents = (v) => Math.round((v + Number.EPSILON) * 100) / 100;
@@ -180,8 +180,9 @@ export function yearsWithData({
   return [...years].sort().reverse();
 }
 
+// settings: für Rollen ohne eigenen Kaufpreis gilt der Preis aus der Preisliste.
 export function computeYear({
-  year, sales = [], spools = [], archive = [], powerPayments = [], expenses = [],
+  year, sales = [], spools = [], archive = [], powerPayments = [], expenses = [], settings = null,
 }) {
   const y = String(year);
   const inYear = (d) => String(d || '').startsWith(y + '-');
@@ -195,16 +196,26 @@ export function computeYear({
   }
   const seen = new Set();
   let unpriced = 0;
+  let listed = 0;
   for (const sp of [...spools, ...archive]) {
     if (seen.has(sp.id)) continue;
     seen.add(sp.id);
     if (!inYear(sp.boughtAt)) continue;
-    if (!(sp.price > 0)) {
+    let amount = sp.price > 0 ? sp.price : 0;
+    const entry = !amount && settings && sp.material && sp.purchaseWeight > 0 ? listPrice(sp.material, settings) : null;
+    if (entry) {
+      amount = listPriceForWeight(entry, sp.purchaseWeight);
+      listed += 1;
+    }
+    if (!amount) {
       unpriced += 1;
       continue;
     }
     const label = sp.label || [sp.material, sp.colorName].filter(Boolean).join(' ');
-    entries.push({ date: sp.boughtAt, kind: 'aus', category: 'Filament', title: `${sp.nr && !label.startsWith('#') ? `#${sp.nr} ` : ''}${label}${sp.deletedAt ? ' (gelöscht)' : ''}`, amount: sp.price });
+    entries.push({
+      date: sp.boughtAt, kind: 'aus', category: 'Filament', amount,
+      title: `${sp.nr && !label.startsWith('#') ? `#${sp.nr} ` : ''}${label}${sp.deletedAt ? ' (gelöscht)' : ''}${entry ? ' (Preis laut Preisliste)' : ''}`,
+    });
   }
   for (const p of powerPayments) {
     if (inYear(p.date) && p.amount > 0) entries.push({ date: p.date, kind: 'aus', category: 'Strom', title: `Strom${p.prints ? ` für ${p.prints} Drucke` : ''}`, amount: p.amount });
@@ -243,6 +254,7 @@ export function computeYear({
     receipts: sales.filter((s) => inYear(s.date)).length,
     byCategory: [...byCategory.entries()].map(([category, amount]) => ({ category, amount: cents(amount) })).sort((a, b) => b.amount - a.amount),
     unpriced,
+    listed,
     prevIncome,
   };
 }
