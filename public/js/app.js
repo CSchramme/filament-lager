@@ -10,6 +10,7 @@ import {
 import { renderAuswertung } from './auswertung.js';
 import { renderCalculator } from './calculator.js';
 import { openLabels } from './labels.js';
+import { deliveriesHtml, deliveryDialog, receiveDialog } from './lieferungen.js';
 import { renderPreise } from './preise.js';
 import { renderPrints } from './prints.js';
 import { qrSvg } from './qr.js';
@@ -284,6 +285,7 @@ function renderLager() {
   if (prefs.material && !materials.includes(prefs.material)) prefs.material = '';
   $view.innerHTML = `
     <section class="stats" id="stats"></section>
+    <section class="panel" id="deliveries" hidden></section>
     <section class="toolbar">
       <label class="search">${icons.search}<input type="search" id="q" placeholder="Farbe, Material, Ort oder #Nummer suchen" aria-label="Suchen" value="${esc(prefs.q)}"></label>
       <div class="chips" id="chips"></div>
@@ -293,12 +295,43 @@ function renderLager() {
       </select>
       <span class="toolbar-actions">
         <button class="btn" type="button" data-action="shopping">${icons.cart}Einkaufsliste</button>
+        <button class="btn" type="button" data-action="delivery-add">${icons.truck}Paket</button>
         <button class="btn" type="button" data-action="labels">${icons.qr}Etiketten</button>
         <button class="btn primary" type="button" data-action="add">${icons.plus} Spule</button>
       </span>
     </section>
     <section class="list" id="list"></section>`;
+  document.getElementById('deliveries').addEventListener('click', onDeliveriesClick);
   updateLager();
+  updateDeliveries();
+  app.backend.deliveries().then((res) => {
+    app.deliveries = res.deliveries;
+    updateDeliveries();
+    updateLager();
+  }).catch(() => {});
+}
+
+// Filament unterwegs (lieferungen.js)
+function updateDeliveries() {
+  const el = document.getElementById('deliveries');
+  if (!el) return;
+  const html = deliveriesHtml(app.deliveries || []);
+  el.innerHTML = html;
+  el.hidden = !html;
+}
+
+function onDeliveriesClick(e) {
+  const b = e.target.closest('[data-dl]');
+  const row = b && b.closest('.delivery-row');
+  const d = row && (app.deliveries || []).find((x) => x.id === row.dataset.id);
+  if (!d) return;
+  if (b.dataset.dl === 'edit') deliveryDialog(app, d, { onDone: deliveriesChanged });
+  if (b.dataset.dl === 'receive') receiveDialog(app, d, { onDone: deliveriesChanged });
+}
+
+function deliveriesChanged() {
+  updateDeliveries();
+  if (app.view === 'lager') updateLager();
 }
 
 function updateLager() {
@@ -314,9 +347,10 @@ function statsHtml() {
   const sum = summarize(app.spools, app.settings);
   const max = Math.max(1, ...sum.byMaterial.map((m) => m.net));
   const short = sum.low + sum.empty;
+  const coming = (app.deliveries || []).filter((d) => !d.receivedAt).reduce((a, d) => a + d.items.reduce((x, i) => x + i.qty, 0), 0);
   const amsSlots = app.spools.filter((s) => s.inAms && s.bambu.slot).map((s) => s.bambu.slot).sort();
   return `
-    <div class="stat"><span class="label">Filament auf Lager</span><span class="value">${fmtKg(sum.totalNet)}<small>kg</small></span><span class="hint">${sum.count} Spulen</span></div>
+    <div class="stat"><span class="label">Filament auf Lager</span><span class="value">${fmtKg(sum.totalNet)}<small>kg</small></span><span class="hint">${sum.count} Spulen${coming ? `, ${coming} unterwegs` : ''}</span></div>
     <div class="stat"><span class="label">Im AMS</span><span class="value">${sum.inAms}</span><span class="hint">${amsSlots.length ? esc(amsSlots.join(' · ')) : 'Spulen eingelegt'}</span></div>
     <div class="stat ${short ? 'warn' : ''}"><span class="label">Knapp, unter 1/${app.settings.lowStockPart} der Spule</span><span class="value">${short}</span><span class="hint">${sum.empty ? `davon ${sum.empty} leer · ` : ''}${short ? '<button type="button" class="link" data-action="shopping">Einkaufsliste</button>' : 'bald nachkaufen'}</span></div>
     <div class="stat"><span class="label">Ungeöffnet</span><span class="value">${sum.sealed}</span><span class="hint">volle Reserve</span></div>
@@ -1165,6 +1199,7 @@ function renderSettings() {
         <div class="ship-row small muted"><span>Name</span><span>Preis €</span><span>Porto €</span><span></span></div>
         <div data-ship>${app.settings.shipping.map(shipRow).join('')}</div>
         <div class="actions"><button type="button" class="btn small" data-action="ship-add">${icons.plus}Versandart</button></div>
+        <label class="field"><span>Lieferung ohne Post: Preis für den Kunden (€)</span><input name="deliveryPrice" inputmode="decimal" value="${app.settings.deliveryPrice.toFixed(2).replace('.', ',')}"><small class="muted">wenn du selbst vorbeibringst, z. B. für die Anfahrt; 0 = kostenlos. Abholung ist immer kostenlos.</small></label>
         <h3>Beleg, Angebot und Strom</h3>
         <div class="fields">
           <label class="field"><span>Dein Name auf dem Beleg</span><input name="sellerName" value="${esc(app.settings.sellerName)}" autocomplete="name"></label>
@@ -1440,7 +1475,8 @@ const actions = {
       updateNotifyPanel();
     }
   }),
-  shopping: () => openShoppingList(app),
+  shopping: () => openShoppingList(app, { onDelivery: deliveriesChanged }),
+  'delivery-add': () => deliveryDialog(app, null, { onDone: deliveriesChanged }),
   labels: () => labelsDialog(),
   'reset-filter': () => {
     Object.assign(prefs, { q: '', chip: 'alle', material: '' });
@@ -1626,7 +1662,7 @@ const forms = {
     app.settings = await app.backend.saveSettings({
       ...app.settings, spoolTypes, shipping, lowStockPart: f.lowStockPart.value, amsUnits: f.amsUnits.value, roundTo: Number(f.roundTo.value),
       ...Object.fromEntries(['pricePerKg', 'energyPrice', 'printerWatts', 'machineRate', 'failPct', 'laborMinutes', 'laborRate', 'profitPct', 'minPrice',
-        'sellerName', 'powerPayee', 'sellerAddress', 'offerDays', 'defaultInfill', 'discountQty', 'discountPct'].map((k) => [k, f[k].value])),
+        'sellerName', 'powerPayee', 'sellerAddress', 'offerDays', 'defaultInfill', 'discountQty', 'discountPct', 'deliveryPrice'].map((k) => [k, f[k].value])),
       smallBusiness: f.smallBusiness.checked,
     });
     renderSettings();

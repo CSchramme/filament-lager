@@ -126,6 +126,7 @@ export function saleFromDraft(draft, settings, { date, customer, note }) {
     note,
     minExtra,
     tracking: draft.tracking ? { number: draft.tracking } : null,
+    order: draft.delivery ? { delivery: draft.delivery } : null, // Versand, Lieferung ohne Post oder Abholung
     rates: {
       energyPrice: settings.energyPrice, printerWatts: settings.printerWatts, machineRate: settings.machineRate, failPct: settings.failPct,
     },

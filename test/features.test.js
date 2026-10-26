@@ -446,3 +446,41 @@ test('Bestellstatus: Schritte, vorwärts und zurück, Abholung', async () => {
   const sale = normalizeSale({ items: [{ title: 'A', qty: 1, price: 1 }] });
   assert.deepEqual([sale.order.status, sale.order.delivery], ['', 'abholung']);
 });
+
+test('Lieferarten: Versand, Lieferung ohne Post, Abholung', async () => {
+  const { orderLabel, orderSteps, orderText } = await import('../public/js/domain.js');
+  assert.deepEqual(orderSteps('lieferung'), ['bestellt', 'bearbeitung', 'druck', 'fertig', 'versendet', 'zugestellt']);
+  assert.deepEqual(['fertig', 'versendet', 'zugestellt'].map((s) => orderLabel(s, 'lieferung')), ['Bereit zur Lieferung', 'Wird gebracht', 'Geliefert']);
+  assert.match(orderText('versendet', 'lieferung'), /persönlich/);
+  assert.equal(orderLabel('versendet', 'versand'), 'Versendet');
+  // Aus dem offenen Beleg: Lieferung ohne Post mit Anfahrt, zählt nicht zum Mindestpreis
+  saveDraft({ positions: [], customer: '', note: '' });
+  addPosition({ title: 'Clip', qty: 1, grams: 5, seconds: 600, perGram: 0.02 });
+  addPosition({ title: 'Lieferung (ohne Post)', qty: 1, manual: true, kind: 'versand', piecePrice: 2, pieceCost: 0.8 });
+  const draft = { ...loadDraft(), delivery: 'lieferung' };
+  const sale = normalizeSale(saleFromDraft(draft, { ...settings, roundTo: 0, discountPct: 0 }, { date: '2026-10-26', customer: '', note: '' }));
+  assert.deepEqual([sale.order.delivery, sale.order.status, sale.qty], ['lieferung', '', 1]);
+  assert.equal(sale.minExtra, 1.15); // Clip 1,85 € bis 3 €, die Lieferung zählt nicht mit
+  assert.equal(normalizeSettings({ deliveryPrice: '2,50' }).deliveryPrice, 2.5);
+});
+
+test('Filament-Pakete: aus der Einkaufsliste, beim Ankommen Rollen mit Preis und Datum', async () => {
+  const {
+    deliveryItemsFromShopping, normalizeDelivery, spoolsFromDelivery,
+  } = await import('../public/js/domain.js');
+  const low = spool({ colorName: 'Schwarz', colorHex: '#000000', netWeight: 60 });
+  const items = deliveryItemsFromShopping(shoppingList([low], settings));
+  assert.deepEqual(items.map((i) => [i.material, i.colorName, i.purchaseWeight, i.price, i.qty]), [['PLA Basic', 'Schwarz', 1000, 19.99, 1]]);
+  const d = normalizeDelivery({
+    shop: 'Bambu Lab Store', orderedAt: '2026-10-20', tracking: { number: '0034 0434 1612 3456 7890' },
+    items: [...items, { material: 'PETG HF', colorName: 'Weiß', colorHex: '#FFFFFF', purchaseWeight: 1000, price: '17,99', qty: 2 }],
+  });
+  assert.equal(d.tracking.number, '00340434161234567890');
+  const made = spoolsFromDelivery(d, { location: '3' }).map((s) => normalizeSpool(s));
+  assert.equal(made.length, 3);
+  assert.deepEqual(made.map((s) => [s.material, s.colorName, s.netWeight, s.price, s.boughtAt, s.location, s.opened]), [
+    ['PLA Basic', 'Schwarz', 1000, 19.99, '2026-10-20', '3', false],
+    ['PETG HF', 'Weiß', 1000, 17.99, '2026-10-20', '3', false],
+    ['PETG HF', 'Weiß', 1000, 17.99, '2026-10-20', '3', false],
+  ]);
+});

@@ -83,6 +83,7 @@ export function defaultSettings() {
     offerDays: 14, // so lange gilt ein Angebot
     defaultInfill: 15, // Infill in % für die Schätzung aus STL-Dateien
     roundTo: 0.5, // Preis pro Teil aufrunden auf (0 = nicht runden)
+    deliveryPrice: 0, // Lieferung ohne Post: Preis für den Kunden (z. B. Anfahrt)
     discountQty: 10, // Mengenrabatt ab so vielen Teilen
     discountPct: 10, // … in Prozent (0 = kein Rabatt)
     // Versandarten als feste Position: Preis für den Kunden, eigene Kosten (Porto)
@@ -238,6 +239,7 @@ export function normalizeSettings(input) {
     defaultInfill: Math.min(100, Math.max(0, toMoney(src.defaultInfill) ?? base.defaultInfill)),
     roundTo: [0, 0.1, 0.5, 1].includes(toMoney(src.roundTo)) ? toMoney(src.roundTo) : base.roundTo,
     discountQty: Math.max(0, toInt(src.discountQty, base.discountQty)),
+    deliveryPrice: Math.max(0, toMoney(src.deliveryPrice) ?? base.deliveryPrice),
     discountPct: Math.min(90, Math.max(0, toMoney(src.discountPct) ?? base.discountPct)),
     shipping: (Array.isArray(src.shipping) ? src.shipping : base.shipping)
       .map((x) => ({ name: str(x && x.name), price: Math.max(0, toMoney(x && x.price) ?? 0), cost: Math.max(0, toMoney(x && x.cost) ?? 0) }))
@@ -638,6 +640,65 @@ export function trackingUrl(t) {
   return `https://www.dhl.de/de/privatkunden/pakete-empfangen/verfolgen.html?piececode=${encodeURIComponent(t.number)}`;
 }
 
+// ---------------------------------------------------------------------------
+// Lieferungen: bestelltes Filament, das unterwegs ist. Beim Ankommen werden
+// daraus Rollen im Lager (mit Kaufpreis und Kaufdatum).
+
+export function normalizeDeliveryItem(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  return {
+    material: str(src.material) || 'PLA Basic',
+    brand: str(src.brand),
+    colorName: str(src.colorName),
+    colorHex: normHex(src.colorHex) || '#9AA0A6',
+    purchaseWeight: Math.max(1, toInt(src.purchaseWeight, 1000)),
+    price: Math.max(0, toMoney(src.price) ?? 0), // pro Rolle
+    qty: Math.min(50, Math.max(1, toInt(src.qty, 1))),
+  };
+}
+
+export function normalizeDelivery(input, { now = new Date().toISOString() } = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(str(v)) ? str(v) : '');
+  return {
+    id: str(src.id) || newId(),
+    shop: str(src.shop),
+    note: str(src.note),
+    orderedAt: day(src.orderedAt) || now.slice(0, 10),
+    expectedAt: day(src.expectedAt),
+    tracking: normalizeTracking(src.tracking),
+    items: (Array.isArray(src.items) ? src.items : []).slice(0, 50).map(normalizeDeliveryItem),
+    receivedAt: str(src.receivedAt), // angekommen
+    spoolIds: (Array.isArray(src.spoolIds) ? src.spoolIds : []).map(str).filter(Boolean), // daraus angelegte Rollen
+    createdAt: str(src.createdAt) || now,
+  };
+}
+
+// Rollen aus der Einkaufsliste als Positionen einer Lieferung
+export function deliveryItemsFromShopping(list) {
+  return list.buy.map((i) => normalizeDeliveryItem({
+    material: i.material, brand: i.brand, colorName: i.colorName, colorHex: i.colorHex, purchaseWeight: i.weight, price: i.estimate ?? 0, qty: 1,
+  }));
+}
+
+// Neue Rollen für eine angekommene Lieferung (je Stück eine Rolle, voll und ungeöffnet)
+export function spoolsFromDelivery(delivery, { location = '', spoolTypeId } = {}) {
+  return delivery.items.flatMap((i) => Array.from({ length: i.qty }, () => ({
+    material: i.material,
+    brand: i.brand,
+    colorName: i.colorName,
+    colorHex: i.colorHex,
+    purchaseWeight: i.purchaseWeight,
+    netWeight: i.purchaseWeight,
+    price: i.price || null,
+    boughtAt: delivery.orderedAt,
+    location,
+    spoolTypeId,
+    opened: false,
+    note: delivery.shop ? `Lieferung von ${delivery.shop}` : '',
+  })));
+}
+
 // Gültige Sendungsnummer: Buchstaben und Ziffern, 8 bis 35 Zeichen
 export const validTrackingNumber = (n) => /^[A-Z0-9]{8,35}$/.test(str(n).replace(/\s+/g, '').toUpperCase());
 
@@ -656,22 +717,34 @@ const ORDER_TEXT = {
   versendet: ['Versendet', 'Das Paket ist mit DHL unterwegs.'],
   zugestellt: ['Zugestellt', 'Das Paket wurde zugestellt. Viel Freude damit!'],
 };
-const PICKUP_TEXT = {
-  fertig: ['Bereit zur Abholung', 'Fertig gedruckt und geprüft, es kann abgeholt werden.'],
-  zugestellt: ['Abgeholt', 'Abgeholt. Viel Freude damit!'],
+// Abweichende Texte je Lieferart
+const DELIVERY_TEXT = {
+  abholung: {
+    fertig: ['Bereit zur Abholung', 'Fertig gedruckt und geprüft, es kann abgeholt werden.'],
+    zugestellt: ['Abgeholt', 'Abgeholt. Viel Freude damit!'],
+  },
+  lieferung: {
+    fertig: ['Bereit zur Lieferung', 'Fertig gedruckt und geprüft. Es wird bald persönlich vorbeigebracht.'],
+    versendet: ['Wird gebracht', 'Ist unterwegs und wird persönlich vorbeigebracht, ohne Post.'],
+    zugestellt: ['Geliefert', 'Persönlich übergeben. Viel Freude damit!'],
+  },
 };
+
+// Wie die Bestellung zum Kunden kommt
+export const DELIVERY_MODES = { versand: 'Versand mit DHL', lieferung: 'Lieferung ohne Post', abholung: 'Abholung' };
 
 // Schritte je nach Lieferart; bei Abholung entfällt "versendet".
 export const orderSteps = (delivery) => ORDER_STEPS.filter((s) => delivery !== 'abholung' || s !== 'versendet');
-export const orderLabel = (status, delivery) => ((delivery === 'abholung' && PICKUP_TEXT[status]) || ORDER_TEXT[status] || [''])[0];
-export const orderText = (status, delivery) => ((delivery === 'abholung' && PICKUP_TEXT[status]) || ORDER_TEXT[status] || ['', ''])[1];
+const orderPair = (status, delivery) => (DELIVERY_TEXT[delivery] && DELIVERY_TEXT[delivery][status]) || ORDER_TEXT[status] || ['', ''];
+export const orderLabel = (status, delivery) => orderPair(status, delivery)[0];
+export const orderText = (status, delivery) => orderPair(status, delivery)[1];
 
 export function normalizeOrder(input, { shipping = false } = {}) {
   const src = input && typeof input === 'object' ? input : {};
   const job = src.printJob && typeof src.printJob === 'object' && str(src.printJob.job) ? { printerId: str(src.printJob.printerId), job: str(src.printJob.job) } : null;
   return {
     status: ORDER_STEPS.includes(src.status) ? src.status : '',
-    delivery: ['versand', 'abholung'].includes(src.delivery) ? src.delivery : (shipping ? 'versand' : 'abholung'),
+    delivery: DELIVERY_MODES[src.delivery] ? src.delivery : (shipping ? 'versand' : 'abholung'),
     history: (Array.isArray(src.history) ? src.history : []).filter((h) => h && ORDER_STEPS.includes(h.status)).slice(-30)
       .map((h) => ({ status: h.status, at: str(h.at) })),
     expectedAt: /^\d{4}-\d{2}-\d{2}$/.test(str(src.expectedAt)) ? str(src.expectedAt) : '', // voraussichtlich fertig bzw. da

@@ -2,10 +2,11 @@
 // Kundenliste. Positionen kommen aus dem Rechner, dem Druckverlauf (Reiter
 // "Drucke") oder dem Vorrat.
 import {
-  customerText, offerStatus, orderLabel, orderStepAt, orderSteps, salesSummary, trackingLabel, trackingUrl, validTrackingNumber,
+  DELIVERY_MODES, customerText, offerStatus, orderLabel, orderStepAt, orderSteps, salesSummary, trackingLabel, trackingUrl, validTrackingNumber,
 } from './domain.js';
 import { openReceipt } from './documents.js';
 import { qrSvg } from './qr.js';
+import { timeDe, trackingHtml, trackShort } from './track.js';
 import {
   addPosition, draftTotals, loadDraft, positionBreakdown, saleFromDraft, saveDraft,
 } from './sales.js';
@@ -113,13 +114,15 @@ function draftHtml() {
       <label class="field"><span>Kunde (optional)</span><input data-meta="customer" id="draft-customer" value="${esc(draft.customer || '')}" placeholder="Name suchen oder neu eingeben">
         <small class="muted" data-k="customer-hint">${esc(customerHint(draft))}</small></label>
       <label class="field full"><span>Notiz auf dem Beleg (optional)</span><input data-meta="note" value="${esc(draft.note || '')}" placeholder="z. B. bar bezahlt"></label>
-      ${draft.positions.some((p) => p.kind === 'versand') || draft.tracking ? `<label class="field full"><span>DHL-Sendungsnummer (optional, auch später möglich)</span>
+      <label class="field"><span>Übergabe an den Kunden</span><select data-meta="delivery">
+        <option value="">nicht angegeben</option>${Object.entries(DELIVERY_MODES).map(([k, l]) => `<option value="${k}" ${draft.delivery === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+      ${draft.delivery === 'versand' || (!draft.delivery && draft.positions.some((p) => p.kind === 'versand')) || draft.tracking ? `<label class="field full"><span>DHL-Sendungsnummer (optional, auch später möglich)</span>
         <input data-meta="tracking" value="${esc(draft.tracking || '')}" inputmode="text" autocomplete="off" placeholder="z. B. 00340434…"></label>` : ''}
     </div>
     <div class="actions">
       <button class="btn primary" type="button" data-draft="create">Beleg erstellen</button>
       <button class="btn" type="button" data-draft="offer">Als Angebot speichern</button>
-      <button class="btn" type="button" data-draft="shipping">${icons.truck}Versand</button>
+      <button class="btn" type="button" data-draft="shipping">${icons.truck}${draft.delivery ? esc(DELIVERY_MODES[draft.delivery]) : 'Versand, Lieferung, Abholung'}</button>
       <button class="btn" type="button" data-draft="manual">Position von Hand</button>
       <span class="spacer"></span>
       <button class="btn ghost" type="button" data-draft="clear">Leeren</button>
@@ -186,6 +189,7 @@ function onDraftInput(e) {
       if (meta === 'customer') d.customerId = ''; // getippt statt gewählt
     });
     if (meta === 'customer') updateDraft(false);
+    if (meta === 'delivery') updateDraft();
     return;
   }
   if (!row) return;
@@ -262,27 +266,44 @@ function manualDialog() {
 }
 
 // Versand als feste Position: Preis für den Kunden, eigene Kosten = Porto
+// Wie kommt die Bestellung zum Kunden: Versand mit DHL (Position mit Porto),
+// Lieferung ohne Post (auf Wunsch mit Preis, z. B. Anfahrt) oder Abholung.
+// Eine frühere Versand- oder Lieferposition wird ersetzt.
 function shippingDialog() {
-  const options = ctx.app.settings.shipping;
+  const { settings } = ctx.app;
+  const options = settings.shipping;
+  const draft = loadDraft();
+  const pick = draft.delivery === 'lieferung' ? 'lieferung' : draft.delivery === 'abholung' ? 'abholung' : '0';
   openDialog({
-    title: 'Versand',
-    body: `<div class="ship-options">${options.map((o, i) => `<label class="switch"><input type="radio" name="option" value="${i}" ${i === 0 ? 'checked' : ''}>
+    title: 'Versand, Lieferung oder Abholung',
+    body: `<div class="ship-options">${options.map((o, i) => `<label class="switch"><input type="radio" name="option" value="${i}" ${String(i) === pick ? 'checked' : ''}>
         <span>${esc(o.name)} <strong class="num">${fmtEur(o.price)}</strong><small>Porto ${fmtEur(o.cost)}</small></span></label>`).join('')}
-        <label class="switch"><input type="radio" name="option" value="own" ${options.length ? '' : 'checked'}><span>Anderer Betrag</span></label></div>
-      <div class="fields">
+        <label class="switch"><input type="radio" name="option" value="own" ${options.length || pick !== '0' ? '' : 'checked'}><span>Anderer Versand-Betrag</span></label>
+        <label class="switch"><input type="radio" name="option" value="lieferung" ${pick === 'lieferung' ? 'checked' : ''}><span>Lieferung ohne Post <strong class="num">${settings.deliveryPrice ? fmtEur(settings.deliveryPrice) : 'kostenlos'}</strong><small>du bringst es selbst vorbei</small></span></label>
+        <label class="switch"><input type="radio" name="option" value="abholung" ${pick === 'abholung' ? 'checked' : ''}><span>Abholung <strong class="num">kostenlos</strong><small>der Kunde holt es ab</small></span></label></div>
+      <div class="fields" data-price>
         <label class="field"><span>Preis für den Kunden (€)</span><input name="price" inputmode="decimal"></label>
-        <label class="field"><span>Porto, eigene Kosten (€)</span><input name="cost" inputmode="decimal"></label>
-        <label class="field full"><span>DHL-Sendungsnummer (optional)</span><input name="tracking" autocomplete="off"></label>
+        <label class="field"><span>Eigene Kosten (€)</span><input name="cost" inputmode="decimal"><small class="muted" data-cost-hint>Porto</small></label>
+        <label class="field full" data-tracking><span>DHL-Sendungsnummer (optional)</span><input name="tracking" autocomplete="off" value="${esc(draft.tracking || '')}"></label>
       </div>
-      <p class="small muted">Versandarten und Preise stehen unter Einstellungen. Die Sendungsnummer kannst du auch später am Beleg eintragen.</p>`,
-    foot: '<span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Hinzufügen</button>',
+      <p class="small muted">Versand und Lieferung zählen nicht zum Mindestpreis. Versandarten, Preise und den Preis für die Lieferung ohne Post stehen unter Einstellungen.</p>`,
+    foot: '<span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Übernehmen</button>',
     onReady(dlg, form) {
       const f = form.elements;
       const fill = () => {
-        const o = options[Number(f.option.value)];
-        if (!o) return;
-        f.price.value = o.price.toFixed(2).replace('.', ',');
-        f.cost.value = o.cost.toFixed(2).replace('.', ',');
+        const v = f.option.value;
+        const o = options[Number(v)];
+        const money = (x) => x.toFixed(2).replace('.', ',');
+        dlg.querySelector('[data-price]').hidden = v === 'abholung';
+        dlg.querySelector('[data-tracking]').hidden = v === 'lieferung' || v === 'abholung';
+        dlg.querySelector('[data-cost-hint]').textContent = v === 'lieferung' ? 'z. B. Sprit' : 'Porto';
+        if (o) {
+          f.price.value = money(o.price);
+          f.cost.value = money(o.cost);
+        } else if (v === 'lieferung') {
+          f.price.value = money(settings.deliveryPrice);
+          f.cost.value = money(0);
+        }
       };
       form.addEventListener('change', (e) => {
         if (e.target.name === 'option') fill();
@@ -291,14 +312,25 @@ function shippingDialog() {
     },
     onSubmit(form) {
       const f = form.elements;
-      const o = options[Number(f.option.value)];
-      const price = num(f.price.value);
-      if (!f.price.value.trim() || !Number.isFinite(price) || price < 0) throw new Error('Bitte den Versandpreis in Euro eingeben.');
-      addPosition({
-        title: `Versand${o ? ` (${o.name})` : ''}`, qty: 1, manual: true, kind: 'versand', piecePrice: price, pieceCost: Math.max(0, num(f.cost.value) || 0),
+      const v = f.option.value;
+      const o = options[Number(v)];
+      const mode = v === 'lieferung' || v === 'abholung' ? v : 'versand';
+      const price = mode === 'abholung' ? 0 : num(f.price.value || '0');
+      if (!Number.isFinite(price) || price < 0) throw new Error('Bitte den Preis in Euro eingeben.');
+      editDraft((d) => {
+        d.positions = d.positions.filter((p) => p.kind !== 'versand');
+        d.delivery = mode;
+        if (mode === 'versand') d.tracking = f.tracking.value.trim();
+        else delete d.tracking;
       });
-      if (f.tracking.value.trim()) editDraft((d) => { d.tracking = f.tracking.value.trim(); });
+      if (mode === 'versand' || price > 0) {
+        addPosition({
+          title: mode === 'versand' ? `Versand${o ? ` (${o.name})` : ''}` : 'Lieferung (ohne Post)',
+          qty: 1, manual: true, kind: 'versand', piecePrice: price, pieceCost: Math.max(0, num(f.cost.value) || 0),
+        });
+      }
       updateDraft();
+      toast(DELIVERY_MODES[mode]);
     },
   });
 }
@@ -574,24 +606,6 @@ function onSalesClick(e) {
 // ---------------------------------------------------------------------------
 // DHL-Sendungsverfolgung
 
-const timeDe = (iso) => (iso ? new Date(iso).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) : '');
-
-// Kurz für die Liste: "unterwegs · Bonn", ohne Abfrage nur die Nummer
-function trackShort(t) {
-  if (!t.status) return `…${t.number.slice(-6)}`;
-  return [trackingLabel(t), t.place].filter(Boolean).join(' · ');
-}
-
-function trackingHtml(t) {
-  if (!t) return '';
-  const head = t.status
-    ? `<p><span class="pill track ${esc(t.status)}">${esc(trackingLabel(t))}</span> ${esc(t.statusText)}${t.place ? ` <span class="muted">(${esc(t.place)})</span>` : ''}</p>
-      <p class="small muted">${t.updatedAt ? `Stand ${esc(timeDe(t.updatedAt))}. ` : ''}${t.checkedAt ? `Bei DHL nachgesehen ${esc(timeDe(t.checkedAt))}.` : ''}</p>`
-    : '';
-  const events = t.events.length > 1 ? `<details><summary>Verlauf (${t.events.length})</summary><ol class="track-events">${t.events.map((e) => `<li><span class="small muted num">${esc(timeDe(e.time))}</span> ${esc(e.text)}${e.place ? ` <span class="muted">· ${esc(e.place)}</span>` : ''}</li>`).join('')}</ol></details>` : '';
-  return `${head}${t.error ? `<p class="small neg">${esc(t.error)}</p>` : ''}${events}`;
-}
-
 const orderLink = (o) => new URL(`bestellung.html#t=${o.token}`, location.href).href;
 
 function stepsHtml(sale) {
@@ -629,7 +643,7 @@ function orderDialog(sale) {
     title: `Bestellung ${esc(sale.nr)}${who ? ` · ${esc(who)}` : ''}`,
     body: `<div class="dlg-section"><h3>Status für den Kunden</h3><div data-steps>${stepsHtml(sale)}</div>
         <div class="fields">
-          <label class="field"><span>Lieferung</span><select name="delivery"><option value="versand" ${o.delivery === 'versand' ? 'selected' : ''}>Versand</option><option value="abholung" ${o.delivery === 'abholung' ? 'selected' : ''}>Abholung</option></select></label>
+          <label class="field"><span>Übergabe</span><select name="delivery">${Object.entries(DELIVERY_MODES).map(([k, l]) => `<option value="${k}" ${o.delivery === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
           <label class="field"><span>Voraussichtlich da bzw. abholbereit</span><input type="date" name="expectedAt" value="${esc(o.expectedAt)}"></label>
           <label class="field full"><span>Nachricht an den Kunden (optional)</span><textarea name="note" rows="2" placeholder="z. B. Der Druck braucht etwas länger, das Filament kommt am Montag.">${esc(o.note)}</textarea></label>
         </div></div>

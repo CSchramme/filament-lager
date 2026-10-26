@@ -769,3 +769,52 @@ test('Bestellverfolgung: Status, Link ohne Passwort, Druckende, DHL', async () =
   await call('PUT', '/api/dhl', { remove: true });
   assert.equal((await fetch(base + '/bestellung.html')).status, 200);
 });
+
+test('Filament-Pakete: DHL-Stand, Meldung bei Zustellung, ins Lager', async () => {
+  await call('PUT', '/api/dhl', { apiKey: 'test-schluessel-123' });
+  await call('PUT', '/api/benachrichtigungen', { enabled: true, topic: 'filament-lager-dhltest', events: { delivered: true } });
+  dhlState.delivered = false;
+  assert.equal((await call('POST', '/api/lieferungen', { number: 'xx' })).status, 400);
+  const created = await call('POST', '/api/lieferungen', {
+    shop: 'Bambu Lab Store', orderedAt: '2026-10-20', number: '0034 0434 1612 3456 7891',
+    items: [{ material: 'PLA Basic', colorName: 'Schwarz', colorHex: '#000000', purchaseWeight: 1000, price: 19.99, qty: 2 }],
+  });
+  assert.equal(created.status, 201);
+  const d = created.body.item;
+  assert.deepEqual([d.tracking.number, d.tracking.status, d.tracking.place], ['00340434161234567891', 'transit', 'Bonn']);
+  assert.equal(dhlCalls.at(-1).number, '00340434161234567891');
+  assert.equal((await call('GET', '/api/lieferungen')).body.deliveries[0].id, d.id);
+
+  // Ändern ohne neue Nummer fragt DHL nicht erneut
+  const before = dhlCalls.length;
+  const upd = await call('PUT', `/api/lieferungen/${d.id}`, { expectedAt: '2026-10-28' });
+  assert.deepEqual([upd.body.item.expectedAt, upd.body.item.tracking.status, dhlCalls.length], ['2026-10-28', 'transit', before]);
+
+  // Zugestellt -> Nachricht "Filament ist da"
+  ntfy.length = 0;
+  dhlState.delivered = true;
+  const checked = await call('POST', `/api/lieferungen/${d.id}/pruefen`, {});
+  assert.equal(checked.body.item.tracking.status, 'delivered');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.match(ntfy.find((x) => x.body.title === 'Filament ist da').body.message, /Bambu Lab Store ist zugestellt \(Musterstadt\)/);
+
+  // Ins Lager: zwei Rollen mit Preis, Kaufdatum und Nummer
+  const count = (await call('GET', '/api/state')).body.spools.length;
+  const got = await call('POST', `/api/lieferungen/${d.id}/angekommen`, { location: 'Kiste' });
+  assert.equal(got.status, 200);
+  assert.equal(got.body.created.length, 2);
+  assert.deepEqual(got.body.created.map((s) => [s.price, s.boughtAt, s.location, s.netWeight]), [[19.99, '2026-10-20', 'Kiste', 1000], [19.99, '2026-10-20', 'Kiste', 1000]]);
+  assert.ok(got.body.created.every((s) => s.nr > 0));
+  assert.equal(got.body.spools.length, count + 2);
+  assert.ok(got.body.item.receivedAt);
+  assert.equal((await call('POST', `/api/lieferungen/${d.id}/angekommen`, {})).status, 409);
+  // Angekommene Pakete fragt das Lager nicht mehr ab
+  const n = dhlCalls.length;
+  await call('GET', '/api/lieferungen');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(dhlCalls.length, n);
+
+  assert.deepEqual((await call('DELETE', `/api/lieferungen/${d.id}`)).body.deliveries, []);
+  await call('PUT', '/api/benachrichtigungen', { enabled: false });
+  await call('PUT', '/api/dhl', { remove: true });
+});

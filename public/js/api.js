@@ -4,7 +4,7 @@
 import {
   advanceOrder, applyPriceChanges, applyStockSale, archiveSpool, assignNumbers, mergeStock, migratePriceList, newId, nextOfferNr, nextReceiptNr, normalizeCustomer,
   normalizeArchivedSpool, normalizeExpense, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
-  normalizeOrder, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary, setOrderStatus,
+  normalizeDelivery, normalizeOrder, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary, setOrderStatus, spoolsFromDelivery,
 } from './domain.js';
 import { seedSpools } from './seed.js';
 
@@ -56,6 +56,12 @@ class ServerBackend {
   setTracking(id, number) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id) + '/sendung', { number }); }
   checkTracking(id) { return this.req('POST', 'api/verkaeufe/' + encodeURIComponent(id) + '/sendung/pruefen', {}); }
   dhlSettings() { return this.req('GET', 'api/dhl'); }
+  deliveries() { return this.req('GET', 'api/lieferungen'); }
+  addDelivery(d) { return this.req('POST', 'api/lieferungen', d); }
+  updateDelivery(id, d) { return this.req('PUT', 'api/lieferungen/' + encodeURIComponent(id), d); }
+  deleteDelivery(id) { return this.req('DELETE', 'api/lieferungen/' + encodeURIComponent(id)); }
+  checkDelivery(id) { return this.req('POST', 'api/lieferungen/' + encodeURIComponent(id) + '/pruefen', {}); }
+  receiveDelivery(id, body) { return this.req('POST', 'api/lieferungen/' + encodeURIComponent(id) + '/angekommen', body); }
   updateOrder(id, body) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id) + '/bestellung', body); }
   saveDhl(body) { return this.req('PUT', 'api/dhl', body); }
   notifySettings() { return this.req('GET', 'api/benachrichtigungen'); }
@@ -164,6 +170,7 @@ class LocalBackend {
         customers: (Array.isArray(raw.customers) ? raw.customers : []).map((x) => normalizeCustomer(x)),
         expenses: (Array.isArray(raw.expenses) ? raw.expenses : []).map((x) => normalizeExpense(x)),
         spoolArchive: (Array.isArray(raw.spoolArchive) ? raw.spoolArchive : []).map((x) => normalizeArchivedSpool(x)),
+        deliveries: (Array.isArray(raw.deliveries) ? raw.deliveries : []).map((x) => normalizeDelivery(x)),
       };
       // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
       for (const sale of [...data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(data, sale.date);
@@ -173,7 +180,7 @@ class LocalBackend {
     }
     const data = {
       settings: normalizeSettings(), spools: seedSpools(), nextNr: 1, sales: [], receiptSeq: {}, powerPayments: [], offers: [], offerSeq: {}, stock: [],
-      customers: [], expenses: [], spoolArchive: [],
+      customers: [], expenses: [], spoolArchive: [], deliveries: [],
     };
     this.write(data);
     return data;
@@ -354,6 +361,48 @@ class LocalBackend {
   async deleteExpense(id) { return this.removeFrom('expenses', id); }
 
   async spoolArchive() { return { archive: this.load().spoolArchive }; }
+
+  // Lieferungen ohne Server: nur Nummer und Link zu dhl.de
+  async deliveries() { return { deliveries: this.load().deliveries }; }
+
+  async addDelivery(input) {
+    const data = this.load();
+    const { number, ...rest } = input;
+    const item = normalizeDelivery({ ...rest, id: undefined, createdAt: undefined, tracking: number ? { number } : null });
+    data.deliveries.unshift(item);
+    this.write(data);
+    return { item, deliveries: data.deliveries };
+  }
+
+  async updateDelivery(id, input) {
+    const data = this.load();
+    const old = data.deliveries.find((x) => x.id === id);
+    if (!old) throw new Error('Lieferung nicht gefunden.');
+    const { number, ...rest } = input;
+    const n = number === undefined ? (old.tracking ? old.tracking.number : '') : String(number || '').replace(/\s+/g, '').toUpperCase();
+    const tracking = old.tracking && old.tracking.number === n ? old.tracking : n ? { number: n } : null;
+    const item = normalizeDelivery({ ...old, ...rest, tracking, id, createdAt: old.createdAt });
+    data.deliveries = data.deliveries.map((x) => (x.id === id ? item : x));
+    this.write(data);
+    return { item, deliveries: data.deliveries };
+  }
+
+  async deleteDelivery(id) { return this.removeFrom('deliveries', id); }
+
+  async receiveDelivery(id, b = {}) {
+    const data = this.load();
+    const d = data.deliveries.find((x) => x.id === id);
+    if (!d) throw new Error('Lieferung nicht gefunden.');
+    if (d.receivedAt) throw new Error('Diese Lieferung ist schon im Lager.');
+    const created = b.createSpools === false ? [] : spoolsFromDelivery(d, { location: String(b.location || '').trim() }).map((s) => normalizeSpool({ ...s, id: newId(), bambu: {} }));
+    data.spools.push(...created);
+    d.receivedAt = new Date().toISOString();
+    d.spoolIds = created.map((s) => s.id);
+    this.write(data);
+    return {
+      item: d, created, spools: data.spools, deliveries: data.deliveries,
+    };
+  }
 
   async stock() {
     return { stock: this.load().stock };

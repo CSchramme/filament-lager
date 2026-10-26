@@ -41,6 +41,8 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
 - **Etiketten mit QR-Code** zum Aufkleben auf die Spulen. Scannen mit der Handykamera öffnet die
   Rolle direkt zum Wiegen.
 - **Einkaufsliste**: was knapp ist und keinen Ersatz im Lager hat, mit dem zuletzt bezahlten Preis.
+- **Filament unterwegs**: bestellte Pakete mit DHL-Sendungsnummer, Stand von DHL, Meldung bei
+  Zustellung und „Ins Lager“, das die Rollen mit Kaufpreis und Kaufdatum anlegt.
 - **Benachrichtigungen aufs Handy** (App ntfy): Druck fertig, abgebrochen oder pausiert, Rolle
   wird knapp, Paket zugestellt.
 - **Auswertung**: Umsatz und Gewinn pro Monat, Filamentverbrauch pro Monat und nach Farbe,
@@ -309,11 +311,18 @@ Unter **Verkauf**:
   „Position von Hand“ fügt z. B. eine Reparatur hinzu. Mit Datum, Kunde und Notiz wird daraus mit
   „Beleg erstellen“ ein Beleg mit fester Nummer (2026-001, 2026-002, …). Der offene Beleg bleibt im
   Browser, bis er erstellt wird.
-- **Versand**: Der Knopf „Versand“ fügt die Versandkosten als feste Position hinzu: DHL Päckchen
-  4,50 €, DHL Paket 6,50 € oder ein anderer Betrag. Zu jeder Versandart gehört das Porto, das du
-  selbst zahlst; es zählt als Kosten des Belegs und in der Jahresübersicht als Ausgabe. Versand
-  zählt nicht zum Mindestpreis. Versandarten, Preise und Porto stehen unter **Einstellungen →
-  Versandarten**.
+- **Versand, Lieferung oder Abholung**: Der Knopf im offenen Beleg legt fest, wie die Bestellung
+  zum Kunden kommt:
+  - **Versand mit DHL** (DHL Päckchen 4,50 €, DHL Paket 6,50 € oder ein anderer Betrag) als feste
+    Position. Zu jeder Versandart gehört das Porto, das du selbst zahlst; es zählt als Kosten des
+    Belegs und in der Jahresübersicht als Ausgabe.
+  - **Lieferung ohne Post**: du bringst es selbst vorbei, auf Wunsch mit einem Preis (z. B. für die
+    Anfahrt, Standard kostenlos).
+  - **Abholung**: der Kunde holt es ab, kostenlos.
+
+  Versand und Lieferung zählen nicht zum Mindestpreis. Die Auswahl steht auch als „Übergabe an den
+  Kunden“ im offenen Beleg. Versandarten, Porto und der Preis für die Lieferung ohne Post stehen
+  unter **Einstellungen → Versandarten**.
 - **Angebot**: „Als Angebot speichern“ macht aus dem offenen Beleg ein Angebot mit eigener Nummer
   (A-2026-001, …) und „gültig bis“ (14 Tage, unter Einstellungen änderbar), zum Drucken oder als
   PDF. Sagt der Kunde zu, macht „Beleg“ in der Angebotsliste daraus mit einem Klick einen Beleg mit
@@ -352,8 +361,9 @@ den Link zu dhl.de.
 Der Lkw-Knopf an einem Beleg (oder der Status-Knopf daneben) öffnet **Bestellung**:
 
 - **Status für den Kunden**: Bestellung eingegangen → In Bearbeitung → Wird gedruckt → Verpackt →
-  Versendet → Zugestellt. Bei **Abholung** (statt Versand) heißt es „Bereit zur Abholung“ und
-  „Abgeholt“, „Versendet“ entfällt. Antippen setzt den Schritt mit Datum und Uhrzeit; auch zurück
+  Versendet → Zugestellt. Bei **Lieferung ohne Post** heißt es „Bereit zur Lieferung“, „Wird
+  gebracht“ und „Geliefert“, bei **Abholung** „Bereit zur Abholung“ und „Abgeholt“ („Versendet“
+  entfällt). Die Übergabe lässt sich im Dialog ändern. Antippen setzt den Schritt mit Datum und Uhrzeit; auch zurück
   geht es, z. B. nach einem Fehldruck.
 - **Voraussichtlich da bzw. abholbereit** (Datum) und eine **Nachricht an den Kunden**.
 - **Link für den Kunden**: „Link erstellen“ macht einen geheimen Link mit QR-Code zur Seite
@@ -492,6 +502,25 @@ steht sie unter „Ersatz im Lager“ statt unter „Nachkaufen“. Der Preis is
 diese Sorte, sonst für das Material derselben Marke; dazu eine Summe. „Liste kopieren“ legt sie als
 Text in die Zwischenablage (für eine Notiz oder eine Nachricht), „Drucken“ als Liste zum Abhaken.
 
+## Filament unterwegs
+
+Für Filament, das du bestellt hast, z. B. im Bambu Lab Store (liefert mit DHL):
+
+1. **Paket eintragen**: im Reiter **Lager** auf „Paket“ tippen, oder in der **Einkaufsliste** auf
+   „Bestellt: Paket eintragen“ (übernimmt die Rollen von der Liste). Shop, Bestelldatum,
+   **DHL-Sendungsnummer** aus der Versandmail, voraussichtliches Datum und die Rollen im Paket
+   (Filamentart, Farbe, Gewicht, Preis pro Rolle, Anzahl; der Preis kommt aus der Preisliste).
+   „Aus der Einkaufsliste“ fügt die Rollen von der Liste hinzu.
+2. Oben im Lager steht dann **Filament unterwegs** mit dem Stand von DHL (z. B. „unterwegs · Bonn“),
+   die Kachel „Filament auf Lager“ zählt die Rollen als „unterwegs“. Mit dem DHL-API-Schlüssel
+   fragt das Lager den Stand selbst ab und meldet „Filament ist da“ aufs Handy.
+3. **Ins Lager**: legt die Rollen voll und ungeöffnet an, mit Kaufpreis und Bestelldatum als
+   Kaufdatum (zählt so in der Jahresübersicht), auf Wunsch mit Lagerort. Danach lassen sich gleich
+   die Etiketten drucken.
+
+Ein Paket antippen öffnet es zum Ändern; dort gibt es auch den Link zu dhl.de, „Jetzt bei DHL
+nachsehen“ und „Löschen“.
+
 ## Benachrichtigungen aufs Handy
 
 Die App schickt Nachrichten über [ntfy](https://ntfy.sh), eine kostenlose App für iPhone und
@@ -504,8 +533,8 @@ Android:
 3. „Benachrichtigungen einschalten“, speichern und „Testnachricht senden“.
 
 Gemeldet werden: **Druck fertig**, **Druck abgebrochen**, **Druck pausiert** (z. B. Filament leer
-oder ein Fehler am Drucker), **Rolle wird knapp oder leer** und **Paket zugestellt** (mit
-DHL-API-Schlüssel, siehe Sendungsverfolgung), jedes einzeln abschaltbar. Die
+oder ein Fehler am Drucker), **Rolle wird knapp oder leer** und **Paket zugestellt** (Pakete an Kunden und
+Filament-Pakete an dich, mit DHL-API-Schlüssel), jedes einzeln abschaltbar. Die
 Druckmeldungen brauchen eine Verbindung zum Drucker (Bambu-Konto oder Heimnetz unter „Bambu“).
 Eine knappe Rolle meldet sich nur einmal, erst nach dem Auffüllen wieder; was beim Einschalten schon
 knapp ist, wird nicht nachgemeldet. Tippen auf die Nachricht öffnet das Lager.

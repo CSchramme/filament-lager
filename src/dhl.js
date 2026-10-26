@@ -87,15 +87,24 @@ export class Tracker {
     return { hasKey: Boolean(c.apiKey), lastCheckAt: c.lastCheckAt, lastError: c.lastError };
   }
 
-  // Fragt eine Sendung ab und trägt das Ergebnis am Beleg ein. Gibt den
-  // aktuellen Beleg zurück. Der Beleg wird über die ID neu gesucht, weil er
-  // während der Abfrage ersetzt worden sein kann.
-  async check(saleId, { now = () => new Date().toISOString() } = {}) {
+  // Belege (Pakete an Kunden) und Lieferungen (Filament an dich) haben beide
+  // eine Sendung; gesucht wird über die ID.
+  find(id) {
+    const sale = this.store.data.sales.find((x) => x.id === id);
+    if (sale) return { item: sale, kind: 'sale' };
+    const delivery = (this.store.data.deliveries || []).find((x) => x.id === id);
+    return delivery ? { item: delivery, kind: 'delivery' } : null;
+  }
+
+  // Fragt eine Sendung ab und trägt das Ergebnis ein. Gibt den aktuellen
+  // Beleg bzw. die Lieferung zurück. Danach wird neu gesucht, weil der
+  // Eintrag während der Abfrage ersetzt worden sein kann.
+  async check(id, { now = () => new Date().toISOString() } = {}) {
     const c = this.config;
-    const before = this.store.data.sales.find((x) => x.id === saleId);
-    if (!before || !before.tracking) return before || null;
-    if (!c.apiKey) return before;
-    const number = before.tracking.number;
+    const before = this.find(id);
+    if (!before || !before.item.tracking) return before ? before.item : null;
+    if (!c.apiKey) return before.item;
+    const number = before.item.tracking.number;
     let patch;
     try {
       patch = { ...(await fetchShipment(number, c.apiKey, this.fetch)), error: '' };
@@ -105,32 +114,37 @@ export class Tracker {
       c.lastError = err.message;
     }
     c.lastCheckAt = now();
-    const sale = this.store.data.sales.find((x) => x.id === saleId);
-    if (!sale || !sale.tracking || sale.tracking.number !== number) return sale || null;
-    const wasDelivered = sale.tracking.status === 'delivered';
-    sale.tracking = normalizeTracking({ ...sale.tracking, ...patch, checkedAt: now() });
+    const found = this.find(id);
+    if (!found || !found.item.tracking || found.item.tracking.number !== number) return found ? found.item : null;
+    const { item, kind } = found;
+    const wasDelivered = item.tracking.status === 'delivered';
+    item.tracking = normalizeTracking({ ...item.tracking, ...patch, checkedAt: now() });
     // Bestellstatus für den Kunden folgt der Sendung
-    if (sale.tracking.status === 'delivered') advanceOrder(sale.order, 'zugestellt', now());
-    else if (['transit', 'pre-transit'].includes(sale.tracking.status)) advanceOrder(sale.order, 'versendet', now());
+    if (kind === 'sale') {
+      if (item.tracking.status === 'delivered') advanceOrder(item.order, 'zugestellt', now());
+      else if (['transit', 'pre-transit'].includes(item.tracking.status)) advanceOrder(item.order, 'versendet', now());
+    }
     await this.store.save();
-    if (!wasDelivered && sale.tracking.status === 'delivered' && this.notifier) {
-      const who = sale.customer ? ` an ${sale.customer.split('\n')[0]}` : '';
-      this.notifier.notify('delivered', {
-        title: 'Paket zugestellt',
-        message: `Beleg ${sale.nr}${who} ist zugestellt${sale.tracking.place ? ` (${sale.tracking.place})` : ''}.`,
-        tags: ['package'],
-        priority: 3,
-        view: 'verkauf',
+    if (!wasDelivered && item.tracking.status === 'delivered' && this.notifier) {
+      const where = item.tracking.place ? ` (${item.tracking.place})` : '';
+      const who = kind === 'sale' && item.customer ? ` an ${item.customer.split('\n')[0]}` : '';
+      this.notifier.notify('delivered', kind === 'sale' ? {
+        title: 'Paket zugestellt', message: `Beleg ${item.nr}${who} ist zugestellt${where}.`, tags: ['package'], priority: 3, view: 'verkauf',
+      } : {
+        title: 'Filament ist da', message: `Das Paket${item.shop ? ` von ${item.shop}` : ''} ist zugestellt${where}. Im Lager auf „Ins Lager“ tippen.`, tags: ['package'], priority: 3, view: 'lager',
       });
     }
-    return sale;
+    return item;
   }
 
   // Sendungen, die noch unterwegs sind und länger nicht abgefragt wurden
   due(nowMs = Date.now()) {
     const cutoff = new Date(nowMs - GIVE_UP_DAYS * 86400000).toISOString().slice(0, 10);
-    return this.store.data.sales.filter((s) => s.tracking && s.tracking.status !== 'delivered' && s.date >= cutoff
-      && (!s.tracking.checkedAt || nowMs - Date.parse(s.tracking.checkedAt) >= CHECK_EVERY_MS));
+    const open = (t) => t && t.status !== 'delivered' && (!t.checkedAt || nowMs - Date.parse(t.checkedAt) >= CHECK_EVERY_MS);
+    return [
+      ...this.store.data.sales.filter((s) => s.date >= cutoff && open(s.tracking)),
+      ...(this.store.data.deliveries || []).filter((d) => !d.receivedAt && d.orderedAt >= cutoff && open(d.tracking)),
+    ];
   }
 
   // Alle fälligen Sendungen nacheinander abfragen (läuft nie doppelt).

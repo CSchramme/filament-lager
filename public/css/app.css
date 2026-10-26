@@ -893,3 +893,17 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
 .dlg-section { display: grid; gap: 8px; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--line); }
 .dlg-section:first-child { padding-top: 0; margin-top: 0; border-top: 0; }
 .open-orders { display: grid; margin-bottom: 8px; }
+
+/* Filament unterwegs */
+#deliveries .sale-list { display: grid; }
+.delivery-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.dl-items { display: grid; gap: 8px; }
+.dl-item { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr) 40px 5.5em 5.5em 4em auto; gap: 6px; align-items: center; }
+.dl-item input[type="color"] { padding: 2px; height: 38px; }
+@media (max-width: 640px) {
+  /* Filamentart; Farbe, Farbton, Gewicht; Preis, Anzahl, Entfernen */
+  .dl-item { grid-template-columns: minmax(0, 1fr) 44px 4.5em auto; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .dl-item [name="material"] { grid-column: 1 / -1; }
+  .dl-item [name="purchaseWeight"], .dl-item [name="qty"] { grid-column: span 2; }
+}
+.dl-receive { margin: 0; padding-left: 0; list-style: none; display: grid; gap: 4px; }

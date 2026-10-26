@@ -6,7 +6,7 @@ import express from 'express';
 import {
   applyPriceChanges, applyStockSale, archiveSpool, colorNameFor, openPower, mergeStock, newId, normalizeCustomer, normalizeExpense, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
   normalizeSettings, normalizeSpool, normalizeStockItem, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
-  validTrackingNumber, ORDER_STEPS, advanceOrder, newToken, normalizeOrder, setOrderStatus, trackingUrl,
+  validTrackingNumber, ORDER_STEPS, advanceOrder, newToken, normalizeDelivery, normalizeOrder, setOrderStatus, spoolsFromDelivery, trackingUrl,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import {
@@ -488,6 +488,67 @@ export function createApp({
     store.data.share = { token: '', createdAt: '' };
     await store.save();
     res.json(shareView());
+  });
+
+  // Filament-Lieferungen: bestellte Rollen mit DHL-Sendungsnummer. Beim
+  // Ankommen werden daraus Rollen im Lager mit Kaufpreis und Kaufdatum.
+  const deliveriesView = () => ({ deliveries: store.data.deliveries });
+  const findDelivery = (id) => {
+    const d = store.data.deliveries.find((x) => x.id === id);
+    if (!d) throw new HttpError(404, 'Lieferung nicht gefunden.');
+    return d;
+  };
+  function deliveryFromBody(body, old = null) {
+    const {
+      number: raw, tracking, id, createdAt, receivedAt, spoolIds, ...rest
+    } = body;
+    const number = raw === undefined ? (old && old.tracking ? old.tracking.number : '') : String(raw || '').replace(/\s+/g, '').toUpperCase();
+    if (number && !validTrackingNumber(number)) throw new HttpError(400, 'Die Sendungsnummer sieht nicht richtig aus: nur Buchstaben und Ziffern, 8 bis 35 Zeichen.');
+    const keep = old && old.tracking && old.tracking.number === number ? old.tracking : number ? { number } : null;
+    return normalizeDelivery({ ...(old || {}), ...rest, tracking: keep, id: old ? old.id : undefined, createdAt: old ? old.createdAt : undefined });
+  }
+  app.get('/api/lieferungen', (req, res) => {
+    res.json(deliveriesView());
+    tracker.checkDue();
+  });
+  app.post('/api/lieferungen', async (req, res) => {
+    const d = deliveryFromBody(req.body || {});
+    store.data.deliveries.unshift(d);
+    await store.save();
+    const fresh = d.tracking ? await tracker.check(d.id) : d;
+    res.status(201).json({ item: fresh, ...deliveriesView() });
+  });
+  app.put('/api/lieferungen/:id', async (req, res) => {
+    const old = findDelivery(req.params.id);
+    const d = deliveryFromBody(req.body || {}, old);
+    store.data.deliveries = store.data.deliveries.map((x) => (x.id === d.id ? d : x));
+    await store.save();
+    const changed = d.tracking && (!old.tracking || old.tracking.number !== d.tracking.number);
+    const fresh = changed ? await tracker.check(d.id) : d;
+    res.json({ item: fresh, ...deliveriesView() });
+  });
+  app.delete('/api/lieferungen/:id', async (req, res) => {
+    store.data.deliveries = store.data.deliveries.filter((x) => x.id !== req.params.id);
+    await store.save();
+    res.json(deliveriesView());
+  });
+  app.post('/api/lieferungen/:id/pruefen', async (req, res) => {
+    const d = findDelivery(req.params.id);
+    if (!d.tracking) throw new HttpError(404, 'Keine Sendungsnummer an dieser Lieferung.');
+    if (!tracker.config.apiKey) throw new HttpError(409, 'Für die Abfrage bei DHL fehlt der API-Schlüssel (Einstellungen).');
+    res.json({ item: await tracker.check(d.id), ...deliveriesView(), dhl: tracker.view() });
+  });
+  app.post('/api/lieferungen/:id/angekommen', async (req, res) => {
+    const d = findDelivery(req.params.id);
+    if (d.receivedAt) throw new HttpError(409, 'Diese Lieferung ist schon im Lager.');
+    const b = req.body || {};
+    const created = b.createSpools === false ? []
+      : spoolsFromDelivery(d, { location: String(b.location || '').trim() }).map((s) => normalizeSpool({ ...s, id: newId(), bambu: {} }));
+    store.spools.push(...created);
+    d.receivedAt = new Date().toISOString();
+    d.spoolIds = created.map((s) => s.id);
+    await store.save(); // vergibt die Rollennummern
+    res.json({ item: d, created, spools: store.spools, ...deliveriesView() });
   });
 
   // Gelöschte Rollen mit Kaufpreis (für die Jahresübersicht)

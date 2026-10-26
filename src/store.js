@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  assignNumbers, migratePriceList, normalizeArchivedSpool, nextReceiptNr, normalizeCustomer, normalizeExpense, normalizeOffer, normalizePowerPayment, normalizeSale,
+  assignNumbers, migratePriceList, normalizeArchivedSpool, normalizeDelivery, nextReceiptNr, normalizeCustomer, normalizeExpense, normalizeOffer, normalizePowerPayment, normalizeSale,
   normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
@@ -62,6 +62,7 @@ export function dataFromRaw(raw) {
   data.spoolArchive = (Array.isArray(raw.spoolArchive) ? raw.spoolArchive : []).map((x) => normalizeArchivedSpool(x));
   data.share = { token: String((raw.share && raw.share.token) || ''), createdAt: String((raw.share && raw.share.createdAt) || '') };
   data.autoBook = normalizeAutoBook(raw.autoBook);
+  data.deliveries = (Array.isArray(raw.deliveries) ? raw.deliveries : []).map((x) => normalizeDelivery(x));
   assignNumbers(data);
   data.settings.places = placeList(data.settings, data.spools);
   const migrated = migratePriceList(raw.settings, data);
@@ -90,7 +91,7 @@ export class Store {
     } else {
       this.data = {
         version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '', tasks: [], sales: [], receiptSeq: {}, powerPayments: [],
-        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [], customers: [], expenses: [], dhl: normalizeDhl(), spoolArchive: [], share: { token: '', createdAt: '' }, autoBook: normalizeAutoBook(),
+        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [], customers: [], expenses: [], dhl: normalizeDhl(), spoolArchive: [], share: { token: '', createdAt: '' }, autoBook: normalizeAutoBook(), deliveries: [],
       };
       await this.save();
     }

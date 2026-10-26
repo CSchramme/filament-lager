@@ -1,7 +1,8 @@
 // Einkaufsliste: was nachgekauft werden muss, mit dem zuletzt bezahlten Preis.
 // Kopieren (z. B. in eine Notiz oder an jemanden schicken) oder drucken.
-import { shoppingList } from './domain.js';
+import { deliveryItemsFromShopping, shoppingList } from './domain.js';
 import { openDocument } from './documents.js';
+import { deliveryDialog } from './lieferungen.js';
 import {
   esc, fmt, fmtEur, openDialog, toast,
 } from './ui.js';
@@ -36,7 +37,8 @@ function row(i) {
   </div>`;
 }
 
-export function openShoppingList(app) {
+// onDelivery: nach dem Eintragen einer Lieferung (Lager neu zeichnen)
+export function openShoppingList(app, { onDelivery } = {}) {
   const list = shoppingList(app.spools, app.settings);
   const body = !list.items.length
     ? '<p>Keine Rolle ist knapp. Nichts nachzukaufen.</p>'
@@ -52,7 +54,7 @@ export function openShoppingList(app) {
     title: 'Einkaufsliste',
     body,
     foot: list.buy.length
-      ? '<button type="button" class="btn" data-shop="print">Drucken</button><span class="spacer"></span><button type="button" class="btn" data-close>Schließen</button><button type="button" class="btn primary" data-shop="copy">Liste kopieren</button>'
+      ? '<button type="button" class="btn" data-shop="print">Drucken</button><button type="button" class="btn" data-shop="ordered">Bestellt: Paket eintragen</button><span class="spacer"></span><button type="button" class="btn" data-close>Schließen</button><button type="button" class="btn primary" data-shop="copy">Liste kopieren</button>'
       : '<span class="spacer"></span><button type="button" class="btn" data-close>Schließen</button>',
     onReady(dlg) {
       dlg.querySelector('[data-shop="copy"]')?.addEventListener('click', async () => {
@@ -62,6 +64,10 @@ export function openShoppingList(app) {
         } catch {
           toast('Kopieren nicht möglich. Bitte „Drucken“ nutzen.', 'error');
         }
+      });
+      dlg.querySelector('[data-shop="ordered"]')?.addEventListener('click', () => {
+        dlg.close();
+        deliveryDialog(app, null, { items: deliveryItemsFromShopping(list), onDone: onDelivery });
       });
       dlg.querySelector('[data-shop="print"]')?.addEventListener('click', () => {
         openDocument('Einkaufsliste', `<h1>Einkaufsliste Filament</h1><p class="sub">${new Date().toLocaleDateString('de-DE')}</p>
