@@ -29,6 +29,11 @@ setInterval(() => {
   app.locals.autoSync().catch((err) => console.error('Automatischer Bambu-Abgleich fehlgeschlagen:', err.message));
 }, AUTO_SYNC_MS).unref();
 
+// DHL-Sendungen: alle 30 Minuten nachsehen, welche wieder dran sind
+// (jede höchstens alle 3 Stunden), zuerst kurz nach dem Start.
+setTimeout(() => app.locals.tracker.checkDue(), 60 * 1000).unref();
+setInterval(() => app.locals.tracker.checkDue(), 30 * 60 * 1000).unref();
+
 // Express ruft den Callback auch bei einem Fehler auf (z. B. Port belegt).
 const server = app.listen(PORT, '0.0.0.0', (err) => {
   if (err) {

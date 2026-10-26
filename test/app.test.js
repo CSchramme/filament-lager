@@ -92,6 +92,25 @@ const notifyFetch = async (url, opts) => {
   return body.topic.includes('kaputt') ? { ok: false, status: 500, text: async () => 'down' } : { ok: true, status: 200, text: async () => '' };
 };
 
+// Nachgebaute DHL-Sendungsverfolgung
+const dhlCalls = [];
+const dhlState = { delivered: false };
+const dhlFetch = async (url, opts) => {
+  const number = new URL(url).searchParams.get('trackingNumber');
+  const key = opts.headers['DHL-API-Key'];
+  dhlCalls.push({ number, key });
+  if (key === 'falscher-schluessel') return { ok: false, status: 401, json: async () => ({}) };
+  if (number === 'JJD000000000000') return { ok: false, status: 404, json: async () => ({ title: 'No shipment with given tracking number found.' }) };
+  const status = dhlState.delivered
+    ? { timestamp: '2026-10-27T10:12:00Z', statusCode: 'delivered', status: 'DELIVERED', description: 'Die Sendung wurde erfolgreich zugestellt.', location: { address: { addressLocality: 'Musterstadt' } } }
+    : { timestamp: '2026-10-26T18:00:00Z', statusCode: 'transit', status: 'TRANSIT', description: 'Die Sendung wurde im Paketzentrum bearbeitet.', location: { address: { addressLocality: 'Bonn' } } };
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({ shipments: [{ id: number, status, events: [status, { timestamp: '2026-10-26T09:00:00Z', statusCode: 'pre-transit', description: 'Die Auftragsdaten wurden übermittelt.' }] }] }),
+  };
+};
+
 async function call(method, url, body) {
   const res = await fetch(base + url, {
     method,
@@ -107,7 +126,7 @@ before(async () => {
   await store.load();
   store.bambu.options.autoSync = false; // die Abgleich-Tests rufen alles selbst auf
   const app = createApp({
-    store, printers, publicDir: path.join(root, 'public'), cloudFactory: (o) => new FakeCloud(o), notifyFetch,
+    store, printers, publicDir: path.join(root, 'public'), cloudFactory: (o) => new FakeCloud(o), notifyFetch, dhlFetch,
   });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
@@ -379,7 +398,7 @@ test('Benachrichtigungen einrichten, testen und knappe Rollen melden', async () 
   assert.equal(on.status, 200);
   assert.deepEqual([on.body.enabled, on.body.hasToken, on.body.token], [true, true, undefined]);
   assert.deepEqual(on.body.events, {
-    done: true, failed: true, paused: false, low: true,
+    done: true, failed: true, paused: false, low: true, delivered: true,
   });
   ntfy.length = 0;
   const t = await call('POST', '/api/benachrichtigungen/test', {});
@@ -501,4 +520,64 @@ test('Versionskennung der Oberfläche gegen alte Dateien im Browser-Cache', asyn
   assert.notEqual((await assetVersion(tmp)).v, v1);
   assert.deepEqual((await assetVersion(tmp)).modules, ['js/app.js']);
   await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('DHL-Sendungsverfolgung: Nummer am Beleg, Stand abfragen, Zustellung melden', async () => {
+  const sale = { date: '2026-10-26', customer: 'Lisa Müller\nHauptstr. 1', items: [{ title: 'Halter', qty: 1, price: 5, cost: 2 }, { title: 'Versand', kind: 'versand', qty: 1, price: 4.5, cost: 4.19 }] };
+  assert.equal((await call('POST', '/api/verkaeufe', { ...sale, tracking: { number: 'abc' } })).status, 400);
+  const created = await call('POST', '/api/verkaeufe', { ...sale, tracking: { number: ' 0034 0434 1612 3456 7890 ' } });
+  assert.equal(created.status, 201);
+  const id = created.body.sale.id;
+  assert.deepEqual([created.body.sale.tracking.number, created.body.sale.tracking.status], ['00340434161234567890', '']);
+  assert.equal(dhlCalls.length, 0); // ohne Schlüssel nur der Link
+  assert.equal((await call('GET', '/api/dhl')).body.hasKey, false);
+  assert.equal((await call('POST', `/api/verkaeufe/${id}/sendung/pruefen`, {})).status, 409);
+
+  // Schlüssel speichern: kommt nie zurück
+  assert.equal((await call('PUT', '/api/dhl', { apiKey: 'x y' })).status, 400);
+  const keyed = await call('PUT', '/api/dhl', { apiKey: 'test-schluessel-123' });
+  assert.deepEqual([keyed.body.hasKey, JSON.stringify(keyed.body).includes('test-schluessel')], [true, false]);
+  assert.equal(JSON.stringify((await call('GET', '/api/state')).body).includes('test-schluessel'), false);
+  await new Promise((r) => setTimeout(r, 30)); // offene Sendungen werden gleich abgefragt
+
+  const checked = await call('POST', `/api/verkaeufe/${id}/sendung/pruefen`, {});
+  assert.equal(checked.status, 200);
+  const t = checked.body.sale.tracking;
+  assert.deepEqual([t.status, t.place, t.statusText, t.events.length], ['transit', 'Bonn', 'Die Sendung wurde im Paketzentrum bearbeitet.', 2]);
+  assert.equal(dhlCalls.at(-1).key, 'test-schluessel-123');
+  assert.equal(dhlCalls.at(-1).number, '00340434161234567890');
+
+  // Zustellung -> Nachricht aufs Handy
+  await call('PUT', '/api/benachrichtigungen', { enabled: true, topic: 'filament-lager-dhltest', events: { delivered: true } });
+  ntfy.length = 0;
+  dhlState.delivered = true;
+  const done = await call('POST', `/api/verkaeufe/${id}/sendung/pruefen`, {});
+  assert.deepEqual([done.body.sale.tracking.status, done.body.sale.tracking.deliveredAt], ['delivered', '2026-10-27T10:12:00Z']);
+  await new Promise((r) => setTimeout(r, 20));
+  const msg = ntfy.find((x) => x.body.title === 'Paket zugestellt');
+  assert.match(msg.body.message, /an Lisa Müller ist zugestellt \(Musterstadt\)/);
+  // Zugestellte Sendungen werden nicht mehr automatisch abgefragt
+  const before = dhlCalls.length;
+  await call('GET', '/api/verkaeufe');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(dhlCalls.length, before);
+
+  // Nummer ändern: DHL kennt sie noch nicht
+  const unknown = await call('PUT', `/api/verkaeufe/${id}/sendung`, { number: 'JJD000000000000' });
+  assert.deepEqual([unknown.body.sale.tracking.status, unknown.body.sale.tracking.deliveredAt], ['unknown', '']);
+  assert.match(unknown.body.sale.tracking.statusText, /noch nicht/);
+  assert.equal((await call('PUT', `/api/verkaeufe/${id}/sendung`, { number: '12' })).status, 400);
+
+  // Falscher Schlüssel: Fehler am Beleg und in den Einstellungen
+  await call('PUT', '/api/dhl', { apiKey: 'falscher-schluessel' });
+  const bad = await call('POST', `/api/verkaeufe/${id}/sendung/pruefen`, {});
+  assert.match(bad.body.sale.tracking.error, /Schlüssel/);
+  assert.equal(bad.body.sale.tracking.status, 'unknown'); // Stand bleibt
+  assert.match((await call('GET', '/api/dhl')).body.lastError, /Schlüssel/);
+
+  // Entfernen
+  const removed = await call('PUT', `/api/verkaeufe/${id}/sendung`, { number: '' });
+  assert.equal(removed.body.sale.tracking, null);
+  assert.equal((await call('PUT', '/api/dhl', { remove: true })).body.hasKey, false);
+  await call('PUT', '/api/benachrichtigungen', { enabled: false });
 });

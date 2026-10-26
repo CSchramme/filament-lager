@@ -6,13 +6,15 @@ import { test } from 'node:test';
 import {
   applyStockSale, defaultSettings, filamentTypes, listPriceForWeight, mergeStock, migratePriceList, nextOfferNr, normalizeOffer, normalizeSale,
   normalizeSettings, normalizeSpool, normalizeStockItem, offerStatus, priceListChanges, priceQuote, priceSource, saleFromOffer, shoppingList,
-  stockFromQuote, stockSaleItem, stockValue, DEFAULT_PRINT_RATE, estimateSeconds, printRate,
+  stockFromQuote, stockSaleItem, stockValue, DEFAULT_PRINT_RATE, estimateSeconds, printRate, archiveSpool, normalizeExpense, normalizePowerPayment,
 } from '../public/js/domain.js';
 import { Store } from '../src/store.js';
 import {
   addPosition, draftTotals, loadDraft, saleFromDraft, saveDraft,
 } from '../public/js/sales.js';
-import { computeStats, monthsFor } from '../public/js/stats.js';
+import {
+  computeStats, computeYear, monthsFor, yearCsv, yearsWithData,
+} from '../public/js/stats.js';
 import { normalizeNotify, Notifier, validateNotify } from '../src/notify.js';
 
 const settings = defaultSettings();
@@ -189,7 +191,7 @@ test('Benachrichtigung: Fehler und Prüfung der Einstellungen', async () => {
   assert.throws(() => validateNotify({ server: 'https://ntfy.sh', topic: 'a b' }), /Thema/);
   assert.doesNotThrow(() => validateNotify({ server: 'https://ntfy.example.de', topic: 'mein_thema-1' }));
   assert.deepEqual(normalizeNotify({ server: 'https://ntfy.sh///', events: { low: false } }).events, {
-    done: true, failed: true, paused: true, low: false,
+    done: true, failed: true, paused: true, low: false, delivered: true,
   });
 });
 
@@ -325,4 +327,48 @@ test('Druckzeit aus dem Gewicht schätzen, gelernt aus dem Druckverlauf', () => 
   assert.equal(printRate(tasks.slice(0, 2)).prints, 0);
   const odd = printRate([{ status: 2, grams: 10, seconds: 100 }, { status: 2, grams: 20, seconds: 4000 }, { status: 2, grams: 30, seconds: 7000 }].map((t) => ({ ...t, seconds: Math.max(t.seconds, 120) })));
   assert.ok(odd.setup >= 0 && odd.perGram > 0);
+});
+
+test('Jahresübersicht: Einnahmen, Filament, Strom, Porto und eigene Ausgaben', () => {
+  const sales = [
+    normalizeSale({ nr: '2026-001', date: '2026-03-02', customer: 'Lisa Müller\nHauptstr. 1', items: [{ title: 'Halter', qty: 2, price: 10, cost: 3 }, { title: 'Versand', kind: 'versand', qty: 1, price: 4.5, cost: 4.19 }] }),
+    normalizeSale({ nr: '2026-002', date: '2026-11-20', items: [{ title: 'Kürbis', qty: 5, price: 7.5, cost: 1.6 }] }),
+    normalizeSale({ nr: '2025-009', date: '2025-12-30', items: [{ title: 'Alt', qty: 1, price: 30, cost: 5 }] }),
+  ];
+  const a = spool({ colorName: 'Schwarz', price: 19.99, boughtAt: '2026-02-10' });
+  a.nr = 6;
+  const b = spool({ colorName: 'Weiß', price: null, boughtAt: '2026-05-01' }); // ohne Preis
+  const old = spool({ colorName: 'Rot', price: 18, boughtAt: '2025-08-01' });
+  // gelöschte Rolle bleibt im Archiv, eine Rolle ohne Preis nicht
+  const gone = spool({ colorName: 'Orange', price: 21.5, boughtAt: '2026-04-04' });
+  gone.nr = 9;
+  let archive = archiveSpool([], gone, '2026-09-01T10:00:00.000Z');
+  archive = archiveSpool(archive, b, '2026-09-01T10:00:00.000Z');
+  assert.equal(archive.length, 1);
+  const powerPayments = [normalizePowerPayment({ date: '2026-06-30', amount: 3.21, prints: 14 })];
+  const expenses = [
+    normalizeExpense({ date: '2026-07-07', title: 'Düse 0,4 mm', amount: 9.99, category: 'Ersatzteile' }),
+    normalizeExpense({ date: '2025-07-07', title: 'Platte', amount: 30, category: 'Ersatzteile' }),
+  ];
+  const r = computeYear({
+    year: 2026, sales, spools: [a, b, old], archive, powerPayments, expenses,
+  });
+  assert.equal(r.income, 22); // 10 + 4,50 Versand + 7,50
+  assert.equal(r.receipts, 2);
+  assert.deepEqual(r.byCategory, [
+    { category: 'Filament', amount: 41.49 }, { category: 'Ersatzteile', amount: 9.99 }, { category: 'Porto', amount: 4.19 }, { category: 'Strom', amount: 3.21 },
+  ]);
+  assert.equal(r.spend, 58.88);
+  assert.equal(r.result, -36.88);
+  assert.equal(r.unpriced, 1);
+  assert.equal(r.prevIncome, 30);
+  assert.deepEqual([r.months[2].income, r.months[2].spend, r.months[1].spend], [14.5, 4.19, 19.99]);
+  assert.match(r.entries.find((e) => e.category === 'Filament' && e.amount === 21.5).title, /^#9 .*Orange.*\(gelöscht\)$/);
+  assert.equal(r.entries[0].title, '#6 PLA Basic Schwarz');
+  assert.deepEqual(yearsWithData({ sales, spools: [a, old], expenses, now: '2026-10-26T00:00:00Z' }), ['2026', '2025']);
+
+  const csv = yearCsv(r);
+  assert.ok(csv.startsWith('\ufeffDatum;Art;Kategorie;Beschreibung;Einnahme;Ausgabe\r\n'));
+  assert.match(csv, /02\.03\.2026;Einnahme;Verkauf;Beleg 2026-001, Lisa Müller;14,50;\r\n/);
+  assert.match(csv, /;Ergebnis;-36,88;\r\n$/);
 });

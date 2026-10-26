@@ -158,3 +158,105 @@ export function computeStats({
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Jahresübersicht für die Steuer (vereinfachte Einnahmen-Überschuss-Rechnung).
+// Einnahmen: die Belege. Ausgaben: Filamentkäufe (Kaufpreis und Kaufdatum der
+// Rollen, auch gelöschter), Stromabrechnungen, Porto der Versandpositionen
+// und eigene Ausgaben (Düsen, Platten, Verpackung …).
+
+// Grenzen für Kleinunternehmer nach § 19 UStG (Stand 2025): Umsatz im Vorjahr
+// höchstens 25.000 €, im laufenden Jahr höchstens 100.000 €.
+export const SMALL_BUSINESS = { prev: 25000, current: 100000 };
+
+export function yearsWithData({
+  sales = [], spools = [], archive = [], powerPayments = [], expenses = [], now = new Date().toISOString(),
+}) {
+  const years = new Set([now.slice(0, 4)]);
+  for (const d of [...sales.map((s) => s.date), ...spools.filter((s) => s.price > 0).map((s) => s.boughtAt), ...archive.map((s) => s.boughtAt),
+    ...powerPayments.map((p) => p.date), ...expenses.map((e) => e.date)]) {
+    if (/^\d{4}/.test(d || '')) years.add(d.slice(0, 4));
+  }
+  return [...years].sort().reverse();
+}
+
+export function computeYear({
+  year, sales = [], spools = [], archive = [], powerPayments = [], expenses = [],
+}) {
+  const y = String(year);
+  const inYear = (d) => String(d || '').startsWith(y + '-');
+  const entries = []; // { date, kind: 'ein'|'aus', category, title, amount, expenseId? }
+  for (const s of sales) {
+    if (!inYear(s.date)) continue;
+    const who = s.customer ? s.customer.split('\n')[0].trim() : '';
+    entries.push({ date: s.date, kind: 'ein', category: 'Verkauf', title: `Beleg ${s.nr}${who ? `, ${who}` : ''}`, amount: s.price });
+    const porto = cents(s.items.filter((i) => i.kind === 'versand').reduce((a, i) => a + i.cost, 0));
+    if (porto > 0) entries.push({ date: s.date, kind: 'aus', category: 'Porto', title: `Porto zu Beleg ${s.nr}`, amount: porto });
+  }
+  const seen = new Set();
+  let unpriced = 0;
+  for (const sp of [...spools, ...archive]) {
+    if (seen.has(sp.id)) continue;
+    seen.add(sp.id);
+    if (!inYear(sp.boughtAt)) continue;
+    if (!(sp.price > 0)) {
+      unpriced += 1;
+      continue;
+    }
+    const label = sp.label || [sp.material, sp.colorName].filter(Boolean).join(' ');
+    entries.push({ date: sp.boughtAt, kind: 'aus', category: 'Filament', title: `${sp.nr && !label.startsWith('#') ? `#${sp.nr} ` : ''}${label}${sp.deletedAt ? ' (gelöscht)' : ''}`, amount: sp.price });
+  }
+  for (const p of powerPayments) {
+    if (inYear(p.date) && p.amount > 0) entries.push({ date: p.date, kind: 'aus', category: 'Strom', title: `Strom${p.prints ? ` für ${p.prints} Drucke` : ''}`, amount: p.amount });
+  }
+  for (const e of expenses) {
+    if (inYear(e.date)) entries.push({ date: e.date, kind: 'aus', category: e.category, title: e.title, amount: e.amount, expenseId: e.id });
+  }
+  entries.sort((a, b) => a.date.localeCompare(b.date) || (a.kind === b.kind ? 0 : a.kind === 'ein' ? -1 : 1));
+
+  const months = Array.from({ length: 12 }, (_, i) => ({ key: `${y}-${String(i + 1).padStart(2, '0')}`, income: 0, spend: 0 }));
+  const byCategory = new Map();
+  for (const e of entries) {
+    const m = months[Number(e.date.slice(5, 7)) - 1];
+    if (!m) continue;
+    if (e.kind === 'ein') m.income += e.amount;
+    else {
+      m.spend += e.amount;
+      byCategory.set(e.category, (byCategory.get(e.category) || 0) + e.amount);
+    }
+  }
+  for (const m of months) {
+    m.income = cents(m.income);
+    m.spend = cents(m.spend);
+    m.result = cents(m.income - m.spend);
+  }
+  const income = cents(months.reduce((a, m) => a + m.income, 0));
+  const spend = cents(months.reduce((a, m) => a + m.spend, 0));
+  const prevIncome = cents(sales.filter((s) => String(s.date || '').startsWith(`${Number(y) - 1}-`)).reduce((a, s) => a + s.price, 0));
+  return {
+    year: y,
+    entries,
+    months,
+    income,
+    spend,
+    result: cents(income - spend),
+    receipts: sales.filter((s) => inYear(s.date)).length,
+    byCategory: [...byCategory.entries()].map(([category, amount]) => ({ category, amount: cents(amount) })).sort((a, b) => b.amount - a.amount),
+    unpriced,
+    prevIncome,
+  };
+}
+
+// CSV für Excel oder den Steuerberater: Semikolon, Komma als Dezimalzeichen
+export function yearCsv(r) {
+  const q = (v) => (/[;"\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const money = (v) => v.toFixed(2).replace('.', ',');
+  const lines = [['Datum', 'Art', 'Kategorie', 'Beschreibung', 'Einnahme', 'Ausgabe'].join(';')];
+  for (const e of r.entries) {
+    const d = `${e.date.slice(8, 10)}.${e.date.slice(5, 7)}.${e.date.slice(0, 4)}`;
+    lines.push([d, e.kind === 'ein' ? 'Einnahme' : 'Ausgabe', e.category, e.title, e.kind === 'ein' ? money(e.amount) : '', e.kind === 'aus' ? money(e.amount) : ''].map(q).join(';'));
+  }
+  lines.push(['', '', '', `Summe ${r.year}`, money(r.income), money(r.spend)].map(q).join(';'));
+  lines.push(['', '', '', 'Ergebnis', money(r.result), ''].map(q).join(';'));
+  return '﻿' + lines.join('\r\n') + '\r\n';
+}

@@ -1,7 +1,9 @@
 // Reiter "Verkauf": offener Beleg, Vorrat, Angebote, erstellte Belege und die
 // Kundenliste. Positionen kommen aus dem Rechner, dem Druckverlauf (Reiter
 // "Drucke") oder dem Vorrat.
-import { customerText, offerStatus, salesSummary } from './domain.js';
+import {
+  customerText, offerStatus, salesSummary, trackingLabel, trackingUrl, validTrackingNumber,
+} from './domain.js';
 import { openReceipt } from './documents.js';
 import {
   addPosition, draftTotals, loadDraft, positionBreakdown, saleFromDraft, saveDraft,
@@ -17,6 +19,7 @@ let offers = [];
 let stock = [];
 let customers = [];
 let customerQuery = '';
+let dhl = { hasKey: false }; // DHL-API-Schlüssel auf dem Server vorhanden?
 
 const today = () => localDay();
 
@@ -37,11 +40,12 @@ export async function renderVerkauf(root, app, { go }) {
   root.querySelector('#customers').addEventListener('click', onCustomersClick);
   root.querySelector('#customers').addEventListener('input', onCustomersInput);
   try {
-    const [s, o, st, c] = await Promise.all([app.backend.sales(), app.backend.offers(), app.backend.stock(), app.backend.customers()]);
+    const [s, o, st, c, d] = await Promise.all([app.backend.sales(), app.backend.offers(), app.backend.stock(), app.backend.customers(), app.backend.dhlSettings()]);
     sales = s;
     offers = o.offers;
     stock = st.stock;
     customers = c.customers;
+    dhl = d;
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -483,11 +487,15 @@ function updateSales() {
       ${tile('Gewinn gesamt', fmtEur(t.profit), `Kosten ${fmtEur(t.cost)}`)}
     </div>
     ${sales.sales.length ? `<div class="sale-list">${sales.sales.slice(0, 50).map((s) => `
-      <div class="sale-row">
+      <div class="sale-row receipt-row">
         <span class="num small muted sale-nr"><span>${esc(s.nr)}</span><span>${dateDe(s.date)}</span></span>
-        <button type="button" class="sale-title" data-sales="open" data-id="${esc(s.id)}"><strong>${esc(s.title)}</strong>${s.qty > 1 ? ` <span class="muted">× ${s.qty}</span>` : ''}${s.customer ? `<span class="small muted"> · ${esc(s.customer.split('\n')[0])}</span>` : ''}</button>
+        <div class="sale-main">
+          <button type="button" class="sale-title" data-sales="open" data-id="${esc(s.id)}"><strong>${esc(s.title)}</strong>${s.qty > 1 ? ` <span class="muted">× ${s.qty}</span>` : ''}${s.customer ? `<span class="small muted"> · ${esc(s.customer.split('\n')[0])}</span>` : ''}</button>
+          ${s.tracking ? `<button type="button" class="pill track ${esc(s.tracking.status || 'none')}" data-sales="track" data-id="${esc(s.id)}">${icons.truck}${esc(trackShort(s.tracking))}</button>` : ''}
+        </div>
         <span class="num">${fmtEur(s.price)}</span>
         <span class="num small ${s.price - s.cost >= 0 ? 'muted' : 'neg'}" title="Gewinn">${s.price - s.cost >= 0 ? '+' : ''}${fmtEur(s.price - s.cost)}</span>
+        <button type="button" class="icon-btn" data-sales="track" data-id="${esc(s.id)}" aria-label="Sendungsnummer" title="DHL-Sendungsnummer">${icons.truck}</button>
         <button type="button" class="icon-btn" data-sales="delete" data-id="${esc(s.id)}" aria-label="Beleg löschen">×</button>
       </div>`).join('')}</div>`
     : '<p class="small muted">Noch keine Belege.</p>'}`;
@@ -499,6 +507,7 @@ function onSalesClick(e) {
   const sale = sales.sales.find((s) => s.id === b.dataset.id);
   if (!sale) return;
   if (b.dataset.sales === 'open') openReceipt(sale, ctx.app.settings);
+  if (b.dataset.sales === 'track') trackingDialog(sale);
   if (b.dataset.sales === 'delete') {
     openDialog({
       title: 'Beleg löschen?',
@@ -512,6 +521,87 @@ function onSalesClick(e) {
       },
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// DHL-Sendungsverfolgung
+
+const timeDe = (iso) => (iso ? new Date(iso).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) : '');
+
+// Kurz für die Liste: "unterwegs · Bonn", ohne Abfrage nur die Nummer
+function trackShort(t) {
+  if (!t.status) return `…${t.number.slice(-6)}`;
+  return [trackingLabel(t), t.place].filter(Boolean).join(' · ');
+}
+
+function trackingHtml(t) {
+  if (!t) return '';
+  const head = t.status
+    ? `<p><span class="pill track ${esc(t.status)}">${esc(trackingLabel(t))}</span> ${esc(t.statusText)}${t.place ? ` <span class="muted">(${esc(t.place)})</span>` : ''}</p>
+      <p class="small muted">${t.updatedAt ? `Stand ${esc(timeDe(t.updatedAt))}. ` : ''}${t.checkedAt ? `Bei DHL nachgesehen ${esc(timeDe(t.checkedAt))}.` : ''}</p>`
+    : '';
+  const events = t.events.length > 1 ? `<details><summary>Verlauf (${t.events.length})</summary><ol class="track-events">${t.events.map((e) => `<li><span class="small muted num">${esc(timeDe(e.time))}</span> ${esc(e.text)}${e.place ? ` <span class="muted">· ${esc(e.place)}</span>` : ''}</li>`).join('')}</ol></details>` : '';
+  return `${head}${t.error ? `<p class="small neg">${esc(t.error)}</p>` : ''}${events}`;
+}
+
+function trackingDialog(sale) {
+  const t = sale.tracking;
+  const server = ctx.app.backend.mode === 'server';
+  openDialog({
+    title: `Sendung zu Beleg ${esc(sale.nr)}`,
+    body: `<label class="field"><span>DHL-Sendungsnummer</span><input name="number" value="${esc(t ? t.number : '')}" autocomplete="off" placeholder="z. B. 00340434161234567890"></label>
+      <div data-track>${trackingHtml(t)}</div>
+      ${t ? `<div class="actions"><a class="btn small" href="${esc(trackingUrl(t))}" target="_blank" rel="noopener">Auf dhl.de verfolgen</a>
+        <button type="button" class="btn small" data-copy>Link für den Kunden kopieren</button>
+        ${dhl.hasKey ? '<button type="button" class="btn small" data-check>Jetzt bei DHL nachsehen</button>' : ''}</div>` : ''}
+      ${!dhl.hasKey ? `<p class="small muted">${server ? 'Mit einem kostenlosen DHL-API-Schlüssel (Einstellungen → Sendungsverfolgung) zeigt das Lager den Stand selbst an und meldet die Zustellung aufs Handy.' : 'Den Stand zeigt das Lager nur mit Server und DHL-API-Schlüssel an, hier gibt es den Link zu dhl.de.'}</p>` : ''}`,
+    foot: `${t ? '<button type="button" class="btn danger" data-remove>Entfernen</button>' : ''}<span class="spacer"></span><button type="button" class="btn" data-close>Schließen</button><button type="submit" class="btn primary">Speichern</button>`,
+    onReady(dlg) {
+      const set = async (number) => {
+        const res = await ctx.app.backend.setTracking(sale.id, number);
+        takeSales(res);
+        updateSales();
+        return res.sale;
+      };
+      dlg.querySelector('[data-copy]')?.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(trackingUrl(t));
+          toast('Link kopiert');
+        } catch {
+          toast(trackingUrl(t));
+        }
+      });
+      dlg.querySelector('[data-check]')?.addEventListener('click', async (e) => {
+        e.target.disabled = true;
+        try {
+          const res = await ctx.app.backend.checkTracking(sale.id);
+          takeSales(res);
+          updateSales();
+          dlg.querySelector('[data-track]').innerHTML = trackingHtml(res.sale.tracking);
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+        e.target.disabled = false;
+      });
+      dlg.querySelector('[data-remove]')?.addEventListener('click', async () => {
+        try {
+          await set('');
+          dlg.close();
+          toast('Sendungsnummer entfernt');
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      });
+    },
+    async onSubmit(form) {
+      const number = form.elements.number.value.replace(/\s+/g, '').toUpperCase();
+      if (number && !validTrackingNumber(number)) throw new Error('Die Sendungsnummer sieht nicht richtig aus: nur Buchstaben und Ziffern, 8 bis 35 Zeichen.');
+      const fresh = await set(number);
+      if (!number) toast('Sendungsnummer entfernt');
+      else if (fresh && fresh.tracking && fresh.tracking.status) toast(`Sendung ${trackingLabel(fresh.tracking)}${fresh.tracking.place ? ` (${fresh.tracking.place})` : ''}`);
+      else toast('Sendungsnummer gespeichert');
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------

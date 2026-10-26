@@ -645,6 +645,25 @@ export const validTrackingNumber = (n) => /^[A-Z0-9]{8,35}$/.test(str(n).replace
 
 export const EXPENSE_CATEGORIES = ['Filament', 'Ersatzteile', 'Werkzeug', 'Versandmaterial', 'Porto', 'Strom', 'Sonstiges'];
 
+// Gelöschte Rollen mit Kaufpreis bleiben für die Jahresübersicht erhalten.
+export function normalizeArchivedSpool(input, { now = new Date().toISOString() } = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  return {
+    id: str(src.id) || newId(),
+    nr: toInt(src.nr, null),
+    label: str(src.label) || spoolLabel(src),
+    price: Math.max(0, toMoney(src.price) ?? 0),
+    boughtAt: /^\d{4}-\d{2}-\d{2}$/.test(str(src.boughtAt)) ? str(src.boughtAt) : now.slice(0, 10),
+    deletedAt: str(src.deletedAt) || now,
+  };
+}
+
+// Rolle beim Löschen ins Archiv, wenn sie einen Kaufpreis hat
+export function archiveSpool(archive, spool, now) {
+  if (!(spool.price > 0)) return archive;
+  return [normalizeArchivedSpool({ ...spool, label: spoolLabel(spool), deletedAt: now }, { now }), ...archive.filter((x) => x.id !== spool.id)];
+}
+
 export function normalizeExpense(input, { now = new Date().toISOString() } = {}) {
   const src = input && typeof input === 'object' ? input : {};
   return {

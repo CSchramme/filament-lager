@@ -4,8 +4,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
 import {
-  applyPriceChanges, applyStockSale, colorNameFor, mergeStock, newId, normalizeCustomer, normalizeExpense, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
-  normalizeSettings, normalizeSpool, normalizeStockItem, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
+  applyPriceChanges, applyStockSale, archiveSpool, colorNameFor, mergeStock, newId, normalizeCustomer, normalizeExpense, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
+  normalizeSettings, normalizeSpool, normalizeStockItem, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
+  validTrackingNumber,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import {
@@ -19,6 +20,7 @@ import { createPublicApi, newApiKey } from './api-v1.js';
 import {
   EVENTS, newTopic, normalizeNotify, Notifier, validateNotify,
 } from './notify.js';
+import { Tracker } from './dhl.js';
 
 // Versionskennung der Oberfläche aus Name, Größe und Änderungszeit der Module
 // und Stylesheets. index.html lädt damit "app.js?v=…", sodass der Browser nach
@@ -47,7 +49,7 @@ class HttpError extends Error {
 // bleibt die Schnittstelle gesperrt, damit niemand den Bestand ändern kann.
 export function createApp({
   store, printers, publicDir, password = '', requirePassword = false, cloudFactory = (opts) => new BambuCloud(opts),
-  notifyFetch = (...a) => fetch(...a),
+  notifyFetch = (...a) => fetch(...a), dhlFetch = (...a) => fetch(...a),
 }) {
   const app = express();
   app.disable('x-powered-by');
@@ -147,6 +149,7 @@ export function createApp({
   // Benachrichtigungen: knappe Rollen bei jedem Speichern, Druckstatus bei jeder Meldung.
   const notifier = new Notifier({ store, fetchFn: notifyFetch });
   store.beforeSave = () => notifier.checkStock();
+  const tracker = new Tracker({ store, notifier, fetchFn: dhlFetch });
 
   if (printers) {
     printers.on('update', (id) => {
@@ -296,10 +299,14 @@ export function createApp({
   app.delete('/api/spools/:id', async (req, res) => {
     const idx = store.spools.findIndex((s) => s.id === req.params.id);
     if (idx < 0) throw new HttpError(404, 'Spule nicht gefunden.');
+    store.data.spoolArchive = archiveSpool(store.data.spoolArchive || [], store.spools[idx], new Date().toISOString());
     store.spools.splice(idx, 1);
     await store.save();
     res.json({ ok: true });
   });
+
+  // Gelöschte Rollen mit Kaufpreis (für die Jahresübersicht)
+  app.get('/api/rollen-archiv', (req, res) => res.json({ archive: store.data.spoolArchive || [] }));
 
   app.put('/api/settings', async (req, res) => {
     store.data.settings = normalizeSettings(req.body);
@@ -374,7 +381,10 @@ export function createApp({
 
   const salesView = () => ({ sales: store.data.sales, summary: salesSummary(store.data.sales), stock: store.data.stock });
 
-  app.get('/api/verkaeufe', (req, res) => res.json(salesView()));
+  app.get('/api/verkaeufe', (req, res) => {
+    res.json(salesView());
+    tracker.checkDue(); // Plesk hält die App im Leerlauf an, deshalb auch beim Öffnen
+  });
 
   // Teile aus dem Vorrat abbuchen; reicht der Vorrat nicht, wird nichts gespeichert.
   function takeFromStock(sale) {
@@ -385,13 +395,58 @@ export function createApp({
     }
   }
 
+  function checkTracking(sale) {
+    if (sale.tracking && !validTrackingNumber(sale.tracking.number)) {
+      throw new HttpError(400, 'Die Sendungsnummer sieht nicht richtig aus: nur Buchstaben und Ziffern, 8 bis 35 Zeichen.');
+    }
+  }
+
   app.post('/api/verkaeufe', async (req, res) => {
     const sale = normalizeSale({ ...(req.body || {}), id: undefined, createdAt: undefined });
+    checkTracking(sale);
     takeFromStock(sale);
     sale.nr = nextReceiptNr(store.data, sale.date);
     store.data.sales.unshift(sale);
     await store.save();
     res.status(201).json({ sale, ...salesView() });
+    if (sale.tracking) tracker.check(sale.id).catch(() => {});
+  });
+
+  // DHL-Sendungsnummer eintragen, ändern oder entfernen (leer). Mit
+  // API-Schlüssel wird der Stand gleich bei DHL abgefragt.
+  app.put('/api/verkaeufe/:id/sendung', async (req, res) => {
+    const sale = store.data.sales.find((x) => x.id === req.params.id);
+    if (!sale) throw new HttpError(404, 'Beleg nicht gefunden.');
+    const number = String((req.body || {}).number || '').replace(/\s+/g, '').toUpperCase();
+    if (number && !validTrackingNumber(number)) throw new HttpError(400, 'Die Sendungsnummer sieht nicht richtig aus: nur Buchstaben und Ziffern, 8 bis 35 Zeichen.');
+    if (!number) sale.tracking = null;
+    else if (!sale.tracking || sale.tracking.number !== number) sale.tracking = normalizeTracking({ number });
+    await store.save();
+    const fresh = number ? await tracker.check(sale.id) : sale;
+    res.json({ sale: fresh, ...salesView() });
+  });
+
+  app.post('/api/verkaeufe/:id/sendung/pruefen', async (req, res) => {
+    const sale = store.data.sales.find((x) => x.id === req.params.id);
+    if (!sale || !sale.tracking) throw new HttpError(404, 'Keine Sendungsnummer an diesem Beleg.');
+    if (!tracker.config.apiKey) throw new HttpError(409, 'Für die Abfrage bei DHL fehlt der API-Schlüssel (Einstellungen).');
+    res.json({ sale: await tracker.check(sale.id), ...salesView(), dhl: tracker.view() });
+  });
+
+  app.get('/api/dhl', (req, res) => res.json(tracker.view()));
+
+  app.put('/api/dhl', async (req, res) => {
+    const body = req.body || {};
+    const key = String(body.apiKey || '').trim();
+    if (body.remove) tracker.config.apiKey = '';
+    else if (key) {
+      if (!/^[A-Za-z0-9_-]{8,128}$/.test(key)) throw new HttpError(400, 'Der API-Schlüssel sieht nicht richtig aus.');
+      tracker.config.apiKey = key;
+    }
+    tracker.config.lastError = '';
+    await store.save();
+    res.json(tracker.view());
+    tracker.checkDue();
   });
 
   app.put('/api/verkaeufe/:id', async (req, res) => {
@@ -804,6 +859,7 @@ export function createApp({
 
   // Für den Start und den Zeitgeber in server.js.
   app.locals.autoSync = autoSync;
+  app.locals.tracker = tracker;
   app.locals.startBambu = async () => {
     syncPrinters();
     if (!cloudCfg().token) return;

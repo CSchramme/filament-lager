@@ -3,10 +3,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  assignNumbers, migratePriceList, nextReceiptNr, normalizeCustomer, normalizeExpense, normalizeOffer, normalizePowerPayment, normalizeSale,
+  assignNumbers, migratePriceList, normalizeArchivedSpool, nextReceiptNr, normalizeCustomer, normalizeExpense, normalizeOffer, normalizePowerPayment, normalizeSale,
   normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
+import { normalizeDhl } from './dhl.js';
 import { normalizeNotify } from './notify.js';
 
 function emptyBambu() {
@@ -64,13 +65,15 @@ export class Store {
       this.data.stock = (Array.isArray(raw.stock) ? raw.stock : []).map((x) => normalizeStockItem(x, { now: x.updatedAt }));
       this.data.customers = (Array.isArray(raw.customers) ? raw.customers : []).map((x) => normalizeCustomer(x));
       this.data.expenses = (Array.isArray(raw.expenses) ? raw.expenses : []).map((x) => normalizeExpense(x));
+      this.data.dhl = normalizeDhl(raw.dhl);
+      this.data.spoolArchive = (Array.isArray(raw.spoolArchive) ? raw.spoolArchive : []).map((x) => normalizeArchivedSpool(x));
       assignNumbers(this.data);
       this.data.settings.places = placeList(this.data.settings, this.data.spools);
       if (migratePriceList(raw.settings, this.data)) await this.save();
     } else {
       this.data = {
         version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '', tasks: [], sales: [], receiptSeq: {}, powerPayments: [],
-        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [], customers: [], expenses: [],
+        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [], customers: [], expenses: [], dhl: normalizeDhl(), spoolArchive: [],
       };
       await this.save();
     }

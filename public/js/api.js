@@ -2,9 +2,9 @@
 // alle Änderungen dorthin. Ohne Server (z. B. als statische Seite) speichert
 // das Lager im Browser; die Bambu-Anbindung ist dann nicht verfügbar.
 import {
-  applyPriceChanges, applyStockSale, assignNumbers, mergeStock, migratePriceList, newId, nextOfferNr, nextReceiptNr, normalizeCustomer,
-  normalizeExpense, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
-  planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
+  applyPriceChanges, applyStockSale, archiveSpool, assignNumbers, mergeStock, migratePriceList, newId, nextOfferNr, nextReceiptNr, normalizeCustomer,
+  normalizeArchivedSpool, normalizeExpense, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
+  normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
 } from './domain.js';
 import { seedSpools } from './seed.js';
 
@@ -51,6 +51,10 @@ class ServerBackend {
   addSale(sale) { return this.req('POST', 'api/verkaeufe', sale); }
   updateSale(id, patch) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id), patch); }
   deleteSale(id) { return this.req('DELETE', 'api/verkaeufe/' + encodeURIComponent(id)); }
+  setTracking(id, number) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id) + '/sendung', { number }); }
+  checkTracking(id) { return this.req('POST', 'api/verkaeufe/' + encodeURIComponent(id) + '/sendung/pruefen', {}); }
+  dhlSettings() { return this.req('GET', 'api/dhl'); }
+  saveDhl(body) { return this.req('PUT', 'api/dhl', body); }
   notifySettings() { return this.req('GET', 'api/benachrichtigungen'); }
   saveNotify(body) { return this.req('PUT', 'api/benachrichtigungen', body); }
   testNotify() { return this.req('POST', 'api/benachrichtigungen/test', {}); }
@@ -63,6 +67,7 @@ class ServerBackend {
   addExpense(x) { return this.req('POST', 'api/ausgaben', x); }
   updateExpense(id, x) { return this.req('PUT', 'api/ausgaben/' + encodeURIComponent(id), x); }
   deleteExpense(id) { return this.req('DELETE', 'api/ausgaben/' + encodeURIComponent(id)); }
+  spoolArchive() { return this.req('GET', 'api/rollen-archiv'); }
   stock() { return this.req('GET', 'api/vorrat'); }
   addStock(item) { return this.req('POST', 'api/vorrat', item); }
   updateStock(id, patch) { return this.req('PUT', 'api/vorrat/' + encodeURIComponent(id), patch); }
@@ -149,6 +154,7 @@ class LocalBackend {
         stock: (Array.isArray(raw.stock) ? raw.stock : []).map((x) => normalizeStockItem(x, { now: x.updatedAt })),
         customers: (Array.isArray(raw.customers) ? raw.customers : []).map((x) => normalizeCustomer(x)),
         expenses: (Array.isArray(raw.expenses) ? raw.expenses : []).map((x) => normalizeExpense(x)),
+        spoolArchive: (Array.isArray(raw.spoolArchive) ? raw.spoolArchive : []).map((x) => normalizeArchivedSpool(x)),
       };
       // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
       for (const sale of [...data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(data, sale.date);
@@ -158,7 +164,7 @@ class LocalBackend {
     }
     const data = {
       settings: normalizeSettings(), spools: seedSpools(), nextNr: 1, sales: [], receiptSeq: {}, powerPayments: [], offers: [], offerSeq: {}, stock: [],
-      customers: [], expenses: [],
+      customers: [], expenses: [], spoolArchive: [],
     };
     this.write(data);
     return data;
@@ -188,6 +194,8 @@ class LocalBackend {
 
   async deleteSpool(id) {
     const data = this.load();
+    const spool = data.spools.find((s) => s.id === id);
+    if (spool) data.spoolArchive = archiveSpool(data.spoolArchive, spool, new Date().toISOString());
     data.spools = data.spools.filter((s) => s.id !== id);
     this.write(data);
   }
@@ -238,6 +246,25 @@ class LocalBackend {
     data.sales = data.sales.map((x) => (x.id === id ? normalizeSale({ ...x, ...patch, id: x.id, nr: x.nr, createdAt: x.createdAt }) : x));
     this.write(data);
     return this.salesView(data);
+  }
+
+  // Ohne Server nur die Nummer und der Link zu dhl.de
+  async setTracking(id, number) {
+    const data = this.load();
+    const sale = data.sales.find((x) => x.id === id);
+    if (!sale) throw new Error('Beleg nicht gefunden.');
+    if (!number) sale.tracking = null;
+    else if (!sale.tracking || sale.tracking.number !== number) sale.tracking = normalizeTracking({ number });
+    this.write(data);
+    return { sale, ...this.salesView(data) };
+  }
+
+  async checkTracking() {
+    throw new Error('Den Stand der Sendung fragt nur der Lager-Server bei DHL ab.');
+  }
+
+  async dhlSettings() {
+    return { hasKey: false, lastCheckAt: '', lastError: '' };
   }
 
   async applyPriceList(material, overwrite) {
@@ -294,6 +321,8 @@ class LocalBackend {
   async updateExpense(id, x) { return this.updateIn('expenses', normalizeExpense, id, x, needAmount); }
 
   async deleteExpense(id) { return this.removeFrom('expenses', id); }
+
+  async spoolArchive() { return { archive: this.load().spoolArchive }; }
 
   async stock() {
     return { stock: this.load().stock };

@@ -1,9 +1,11 @@
 // Reiter "Auswertung": Kennzahlen und Diagramme für einen Zeitraum.
 // Umsatz und Gewinn pro Monat, Filamentverbrauch pro Monat und nach Farbe,
-// Bestseller. Der Zeitraum oben gilt für alles darunter.
+// Bestseller. Der Zeitraum oben gilt für die Diagramme; darunter die
+// Jahresübersicht für die Steuer (jahr.js).
 import {
   attachTooltip, barList, columnChart, legend, tableView,
 } from './charts.js';
+import { renderYear } from './jahr.js';
 import { computeStats, RANGES } from './stats.js';
 import {
   fmt, fmtEur, fmtKg, fmtNum, toast,
@@ -26,11 +28,18 @@ const gramsText = (g) => (g >= 1000 ? `${fmtKg(g)} kg` : `${fmt(g)} g`);
 
 export async function renderAuswertung(root, app) {
   root.innerHTML = '<section class="panel"><p class="small muted">Lädt …</p></section>';
-  const data = { tasks: [], sales: [] };
+  const data = {
+    tasks: [], sales: [], powerPayments: [], expenses: [], archive: [],
+  };
   try {
-    const [history, sales] = await Promise.all([app.backend.tasks(), app.backend.sales()]);
+    const [history, sales, power, expenses, archive] = await Promise.all([
+      app.backend.tasks(), app.backend.sales(), app.backend.powerPayments(), app.backend.expenses(), app.backend.spoolArchive(),
+    ]);
     data.tasks = history.tasks || [];
     data.sales = sales.sales || [];
+    data.powerPayments = power.payments || [];
+    data.expenses = expenses.expenses || [];
+    data.archive = archive.archive || [];
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -86,6 +95,7 @@ function draw() {
       <figure class="panel chart-card" id="ch-colors"></figure>
       <figure class="panel chart-card" id="ch-best"></figure>
     </div>
+    <section class="panel" id="year"></section>
   </div>`;
   root.querySelector('.filter-row').addEventListener('click', (e) => {
     const b = e.target.closest('[data-range]');
@@ -98,6 +108,7 @@ function draw() {
   });
   attachTooltip(root.querySelector('.stats-view'));
   drawCharts();
+  renderYear(root.querySelector('#year'), app, data);
 }
 
 function head(title, sub) {

@@ -5,7 +5,7 @@ import {
   spoolPlace, spoolTypeOf, spoolsFromRows, stockLevel, summarize, toCsv, weightPatch,
 } from './domain.js';
 import {
-  combobox, download, esc, fmt, fmtEur, fmtKg, icons, openDialog, parseNum, readFile, ring, timeAgo, toast,
+  combobox, download, esc, fmt, fmtEur, fmtKg, icons, localDay, openDialog, parseNum, readFile, ring, timeAgo, toast,
 } from './ui.js';
 import { renderAuswertung } from './auswertung.js';
 import { renderCalculator } from './calculator.js';
@@ -430,6 +430,7 @@ function spoolDialog(spool, { copy = false } = {}) {
       <div class="swatches full">${COLOR_PRESETS.map((c) => `<button type="button" class="swatch" data-hex="${c.hex}" data-name="${esc(c.name)}" title="${esc(c.name)}" aria-label="${esc(c.name)}" aria-pressed="${c.hex === s.colorHex}" style="background:${c.hex}"></button>`).join('')}</div>
       <label class="field"><span>Kaufgewicht in g</span><input name="purchaseWeight" type="number" inputmode="numeric" min="0" step="1" list="dl-weights" value="${s.purchaseWeight}"></label>
       <label class="field"><span>Kaufpreis der Rolle in €</span><input name="price" inputmode="decimal" value="${s.price === null || s.price === undefined ? '' : esc(String(s.price).replace('.', ','))}"><small class="muted" data-price-hint></small></label>
+      <label class="field"><span>Kaufdatum</span><input name="boughtAt" type="date" value="${esc(isNew ? localDay() : s.boughtAt || '')}"><small class="muted">für die Jahresübersicht</small></label>
       <label class="field"><span>Spulenart</span><select name="spoolTypeId">${types.map((t) => `<option value="${esc(t.id)}" ${t.id === s.spoolTypeId ? 'selected' : ''}>${esc(t.name)} (Tara ${fmt(t.tare)} g)</option>`).join('')}</select></label>
       <label class="field"><span>Gewicht mit Spule in g</span><input name="gross" type="number" inputmode="numeric" min="0" step="1" value="${s.netWeight + tareFor(s.spoolTypeId)}"></label>
       <label class="field"><span>Restgewicht Filament in g</span><input name="netWeight" type="number" inputmode="numeric" min="0" step="1" value="${s.netWeight}"></label>
@@ -560,6 +561,7 @@ function spoolDialog(spool, { copy = false } = {}) {
         colorHex: f.colorHex.value,
         purchaseWeight: f.purchaseWeight.value,
         price: listed ?? f.price.value,
+        boughtAt: f.boughtAt.value || undefined,
         netWeight: f.netWeight.value === '' ? f.purchaseWeight.value : f.netWeight.value,
         spoolTypeId: f.spoolTypeId.value,
         location: f.location.value,
@@ -1203,11 +1205,16 @@ function renderSettings() {
     <div id="notify-body" class="small muted">${server ? 'Lädt …' : 'Benachrichtigungen verschickt der Lager-Server. In dieser Browser-Version gibt es sie nicht.'}</div>
   </section>
   ${server ? `<section class="panel">
+    <div class="panel-head"><h2>Sendungsverfolgung (DHL)</h2><p>Stand der Pakete am Beleg, Meldung bei Zustellung</p></div>
+    <div id="dhl-body" class="small muted">Lädt …</div>
+  </section>
+  <section class="panel">
     <div class="panel-head"><h2>API</h2><p>Bestand für andere Programme abrufen, z. B. Home Assistant</p></div>
     <div id="api-body" class="small muted">Lädt …</div>
   </section>` : ''}`;
   if (server) {
     updateNotifyPanel();
+    updateDhlPanel();
     updateApiPanel();
   }
 }
@@ -1217,7 +1224,37 @@ const NOTIFY_EVENTS = [
   ['failed', 'Druck abgebrochen'],
   ['paused', 'Druck pausiert (z. B. Filament leer)'],
   ['low', 'Rolle wird knapp oder leer'],
+  ['delivered', 'Paket zugestellt (mit DHL-Schlüssel)'],
 ];
+
+async function updateDhlPanel() {
+  const el = document.getElementById('dhl-body');
+  if (!el) return;
+  let d;
+  try {
+    d = await app.backend.dhlSettings();
+  } catch (err) {
+    el.textContent = err.message;
+    return;
+  }
+  el.classList.remove('small', 'muted');
+  el.innerHTML = `<p class="small">Sendungsnummern trägst du im Reiter „Verkauf“ am Beleg ein (Lkw-Knopf) oder beim Versand im offenen Beleg.
+      Ohne Schlüssel gibt es den Link zur Sendungsverfolgung auf dhl.de. Mit einem kostenlosen Schlüssel von DHL fragt das Lager den Stand selbst ab,
+      etwa alle 3 Stunden, solange die App läuft, und meldet die Zustellung aufs Handy.</p>
+    <details><summary>So bekommst du den Schlüssel</summary>
+      <ol class="steps">
+        <li>Auf <a href="https://developer.dhl.com" target="_blank" rel="noopener">developer.dhl.com</a> kostenlos registrieren.</li>
+        <li>Unter „My Apps“ eine App anlegen und die API <strong>„Shipment Tracking - Unified“</strong> auswählen.</li>
+        <li>Nach der Freigabe (meist sofort) den <strong>API Key</strong> der App kopieren und hier eintragen. Das API Secret wird nicht gebraucht.</li>
+      </ol>
+      <p class="small muted">Kostenlos sind 250 Abfragen am Tag; das reicht für viele Pakete.</p>
+    </details>
+    <form data-form="dhl" class="fields">
+      <label class="field full"><span>DHL-API-Schlüssel</span><input name="apiKey" type="password" autocomplete="off" placeholder="${d.hasKey ? 'gespeichert, leer lassen zum Behalten' : 'API Key von developer.dhl.com'}"></label>
+      <div class="actions full"><button class="btn primary" type="submit">Speichern</button>${d.hasKey ? '<button class="btn" type="button" data-action="dhl-remove">Schlüssel entfernen</button>' : ''}</div>
+    </form>
+    <p class="small muted">${d.hasKey ? 'Schlüssel gespeichert. ' : 'Kein Schlüssel gespeichert. '}${d.lastError ? `<span class="neg">Letzter Fehler: ${esc(d.lastError)}</span> ` : ''}${d.lastCheckAt ? `Zuletzt abgefragt ${esc(timeAgo(d.lastCheckAt))}.` : ''}</p>`;
+}
 
 async function updateNotifyPanel() {
   const el = document.getElementById('notify-body');
@@ -1402,6 +1439,11 @@ const actions = {
     const inputs = document.querySelectorAll('[data-types] [name="typeName"]');
     inputs[inputs.length - 1].focus();
   },
+  'dhl-remove': () => run(async () => {
+    await app.backend.saveDhl({ remove: true });
+    await updateDhlPanel();
+    toast('DHL-Schlüssel entfernt');
+  }),
   'ship-add': () => {
     document.querySelector('[data-ship]').insertAdjacentHTML('beforeend', shipRow({ name: '', price: 0, cost: 0 }));
     const inputs = document.querySelectorAll('[data-ship] [name="shipName"]');
@@ -1551,6 +1593,12 @@ const forms = {
     });
     await updateNotifyPanel();
     toast(f.enabled.checked ? 'Benachrichtigungen eingeschaltet' : 'Benachrichtigungen gespeichert (aus)');
+  },
+  async dhl(f) {
+    if (!f.apiKey.value.trim()) throw new Error('Bitte den API-Schlüssel eintragen.');
+    await app.backend.saveDhl({ apiKey: f.apiKey.value.trim() });
+    await updateDhlPanel();
+    toast('DHL-Schlüssel gespeichert, offene Sendungen werden abgefragt');
   },
   async import(f) {
     const file = f.file.files[0];

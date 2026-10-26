@@ -1,11 +1,12 @@
 // Benachrichtigungen aufs Handy über ntfy (kostenlose App "ntfy" für iOS und
 // Android, dort das Thema abonnieren). Gemeldet wird: Druck fertig,
-// abgebrochen oder pausiert (z. B. Filament leer) und eine Rolle wird knapp.
+// abgebrochen oder pausiert (z. B. Filament leer), eine Rolle wird knapp und
+// ein Paket ist zugestellt.
 // Das Thema ist zufällig und wirkt wie ein Passwort: Wer es kennt, liest mit.
 import crypto from 'node:crypto';
 import { stockLevel } from '../public/js/domain.js';
 
-export const EVENTS = ['done', 'failed', 'paused', 'low'];
+export const EVENTS = ['done', 'failed', 'paused', 'low', 'delivered'];
 
 export function newTopic() {
   return 'filament-lager-' + crypto.randomBytes(8).toString('hex');
