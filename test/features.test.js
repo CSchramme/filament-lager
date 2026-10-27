@@ -484,3 +484,20 @@ test('Filament-Pakete: aus der Einkaufsliste, beim Ankommen Rollen mit Preis und
     ['PETG HF', 'Weiß', 1000, 17.99, '2026-10-20', '3', false],
   ]);
 });
+
+test('Fahrtkosten und Bambu-Farben', async () => {
+  const { deliveryQuote } = await import('../public/js/domain.js');
+  const { bambuColors, bambuMaterials } = await import('../public/js/bambu-colors.js');
+  const s = normalizeSettings({ kmRate: '0,30', kmCost: '0,20', deliveryPrice: '1', roundTo: 0.5 });
+  // 12,3 km einfach, hin und zurück 24,6 km × 0,30 € + 1 € Grundpreis = 8,38 €, aufgerundet 8,50 €
+  assert.deepEqual(deliveryQuote(12.3, s), { km: 12.3, trip: 24.6, raw: 8.38, price: 8.5, cost: 4.92 });
+  assert.deepEqual(deliveryQuote(10, { ...s, roundTrip: false, roundTo: 0 }), { km: 10, trip: 10, raw: 4, price: 4, cost: 2 });
+  assert.equal(normalizeSettings({}).roundTrip, true);
+  // Bambu-Sortiment
+  assert.ok(bambuMaterials().includes('PLA Basic') && bambuMaterials().includes('PETG HF'));
+  const basic = bambuColors('pla basic');
+  assert.ok(basic.length > 20);
+  assert.deepEqual(basic.find((c) => c.name === 'Kürbis-Orange'), { name: 'Kürbis-Orange', hex: '#FF9016', hexes: ['#FF9016'] });
+  assert.deepEqual(bambuColors('Unbekannt XY'), []);
+  assert.ok(filamentTypes([], settings).some((t) => t.material === 'PLA Silk')); // ganzes Sortiment zur Auswahl
+});

@@ -818,3 +818,41 @@ test('Filament-Pakete: DHL-Stand, Meldung bei Zustellung, ins Lager', async () =
   await call('PUT', '/api/benachrichtigungen', { enabled: false });
   await call('PUT', '/api/dhl', { remove: true });
 });
+
+test('Entfernung zum Kunden über OpenStreetMap, mit Zwischenspeicher', async () => {
+  const calls = [];
+  const mapFetch = async (url, opts) => {
+    calls.push({ url, agent: opts.headers['User-Agent'] });
+    if (url.includes('nominatim')) {
+      const q = new URL(url).searchParams.get('q');
+      if (q.includes('Nirgendwo')) return { ok: true, json: async () => [] };
+      const home = q.includes('Hauptstr');
+      return { ok: true, json: async () => [{ lat: home ? '50.1' : '50.2', lon: home ? '8.6' : '8.7', display_name: home ? 'Hauptstraße 1, Musterstadt, Hessen, 12345, Deutschland' : 'Gartenweg 5, Nachbarort, Hessen, 12346, Deutschland' }] };
+    }
+    return { ok: true, json: async () => ({ code: 'Ok', routes: [{ distance: 12345, duration: 960 }] }) };
+  };
+  const store = new Store(path.join(dir, 'route.json'));
+  await store.load();
+  const app = createApp({ store, printers: null, publicDir: path.join(root, 'public'), mapFetch });
+  const srv = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+  const url = `http://127.0.0.1:${srv.address().port}`;
+  const post = async (body) => {
+    const r = await fetch(url + '/api/entfernung', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    return { status: r.status, body: await r.json() };
+  };
+  assert.match((await post({ to: 'Gartenweg 5, 12346 Nachbarort' })).body.error, /Deine Adresse fehlt/);
+  store.data.settings.homeAddress = 'Hauptstr. 1\n12345 Musterstadt';
+  const r = await post({ to: 'Gartenweg 5\n12346 Nachbarort' });
+  assert.equal(r.status, 200);
+  assert.deepEqual([r.body.km, r.body.minutes], [12.3, 16]);
+  assert.equal(r.body.from, 'Hauptstraße 1, Musterstadt, Hessen, 12345');
+  assert.ok(calls.every((c) => /Filament-Lager/.test(c.agent)));
+  assert.match(calls.find((c) => c.url.includes('nominatim')).url, /Hauptstr\.%201%2C%2012345%20Musterstadt/);
+  // zweites Mal aus dem Speicher, ohne Abfrage
+  const before = calls.length;
+  assert.equal((await post({ to: 'gartenweg 5, 12346 nachbarort' })).body.km, 12.3);
+  assert.equal(calls.length, before);
+  assert.match((await post({ to: 'Nirgendwo 1' })).body.error, /nicht gefunden/);
+  assert.match((await post({ to: '' })).body.error, /Adresse des Kunden/);
+  srv.close();
+});

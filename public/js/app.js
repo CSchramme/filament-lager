@@ -9,6 +9,7 @@ import {
 } from './ui.js';
 import { renderAuswertung } from './auswertung.js';
 import { renderCalculator } from './calculator.js';
+import { pickColor, swatchesHtml } from './farben.js';
 import { openLabels } from './labels.js';
 import { deliveriesHtml, deliveryDialog, receiveDialog } from './lieferungen.js';
 import { renderPreise } from './preise.js';
@@ -461,7 +462,8 @@ function spoolDialog(spool, { copy = false } = {}) {
       <div class="field full"><span>Farbe</span>
         <div class="color-row"><input name="colorName" list="dl-color" value="${esc(s.colorName)}" placeholder="z. B. Kürbis Orange" aria-label="Farbname"><input type="color" name="colorHex" value="${esc(s.colorHex)}" aria-label="Farbton"></div>
       </div>
-      <div class="swatches full">${COLOR_PRESETS.map((c) => `<button type="button" class="swatch" data-hex="${c.hex}" data-name="${esc(c.name)}" title="${esc(c.name)}" aria-label="${esc(c.name)}" aria-pressed="${c.hex === s.colorHex}" style="background:${c.hex}"></button>`).join('')}</div>
+      <div class="swatches full">${swatchesHtml(s.material, s.colorHex, s.colorName)}</div>
+      <div class="full"><button type="button" class="btn small" data-pick-color>Farbe mit Namen wählen …</button></div>
       <label class="field"><span>Kaufgewicht in g</span><input name="purchaseWeight" type="number" inputmode="numeric" min="0" step="1" list="dl-weights" value="${s.purchaseWeight}"></label>
       <label class="field"><span>Kaufpreis der Rolle in €</span><input name="price" inputmode="decimal" value="${s.price === null || s.price === undefined ? '' : esc(String(s.price).replace('.', ','))}"><small class="muted" data-price-hint></small></label>
       <label class="field"><span>Kaufdatum</span><input name="boughtAt" type="date" value="${esc(isNew ? localDay() : s.boughtAt || '')}"><small class="muted">für die Jahresübersicht</small></label>
@@ -514,8 +516,29 @@ function spoolDialog(spool, { copy = false } = {}) {
           value: t.material,
           hint: [t.entry ? `${fmtEur(t.entry.price)} / ${fmt(t.entry.weight)} g` : '', t.count ? `${t.count} im Lager` : ''].filter(Boolean).join(' · '),
         })),
-        onPick: priceHint,
+        onPick: () => {
+          priceHint();
+          refreshSwatches();
+        },
         newLabel: (v) => `„${v}“ als neue Filamentart`,
+      });
+      // Farbflächen passend zur Filamentart (Bambu-Sortiment)
+      // Nur bei anderer Filamentart neu zeichnen: Das Feld meldet "change" auch
+      // beim Verlassen, genau wenn eine Farbfläche angetippt wird.
+      let swatchFor = s.material;
+      const refreshSwatches = (force = false) => {
+        if (!force && f.material.value.trim().toLowerCase() === String(swatchFor).trim().toLowerCase()) return;
+        swatchFor = f.material.value;
+        form.querySelector('.swatches').innerHTML = swatchesHtml(f.material.value, f.colorHex.value, f.colorName.value);
+      };
+      f.material.addEventListener('change', () => refreshSwatches());
+      dlg.querySelector('[data-pick-color]').addEventListener('click', async () => {
+        const c = await pickColor({ material: f.material.value, name: f.colorName.value, hex: f.colorHex.value });
+        if (!c) return;
+        f.colorName.value = c.name;
+        f.colorHex.value = c.hex.toLowerCase();
+        nameAuto = true;
+        refreshSwatches(true);
       });
       f.purchaseWeight.addEventListener('input', priceHint);
       priceHint();
@@ -1199,7 +1222,15 @@ function renderSettings() {
         <div class="ship-row small muted"><span>Name</span><span>Preis €</span><span>Porto €</span><span></span></div>
         <div data-ship>${app.settings.shipping.map(shipRow).join('')}</div>
         <div class="actions"><button type="button" class="btn small" data-action="ship-add">${icons.plus}Versandart</button></div>
-        <label class="field"><span>Lieferung ohne Post: Preis für den Kunden (€)</span><input name="deliveryPrice" inputmode="decimal" value="${app.settings.deliveryPrice.toFixed(2).replace('.', ',')}"><small class="muted">wenn du selbst vorbeibringst, z. B. für die Anfahrt; 0 = kostenlos. Abholung ist immer kostenlos.</small></label>
+        <h3>Lieferung ohne Post</h3>
+        <p class="small muted">Wenn du selbst vorbeibringst: Grundpreis + gefahrene km × Preis pro km, aufgerundet wie die Teilepreise. Die Entfernung berechnet das Lager von deiner Adresse zum Kunden über OpenStreetMap. Abholung ist immer kostenlos.</p>
+        <div class="fields">
+          <label class="field full"><span>Deine Adresse (Start der Fahrt)</span><textarea name="homeAddress" rows="2" placeholder="Straße Nr., PLZ Ort">${esc(app.settings.homeAddress)}</textarea><small class="muted">geht nur an OpenStreetMap, um die Strecke zu berechnen</small></label>
+          <label class="field"><span>Preis pro km für den Kunden (€)</span><input name="kmRate" inputmode="decimal" value="${app.settings.kmRate.toFixed(2).replace('.', ',')}"></label>
+          <label class="field"><span>Deine Kosten pro km (€)</span><input name="kmCost" inputmode="decimal" value="${app.settings.kmCost.toFixed(2).replace('.', ',')}"><small class="muted">Sprit und Auto; 0,30 € ist die steuerliche Pauschale</small></label>
+          <label class="field"><span>Grundpreis pro Lieferung (€)</span><input name="deliveryPrice" inputmode="decimal" value="${app.settings.deliveryPrice.toFixed(2).replace('.', ',')}"><small class="muted">0 = nur die km</small></label>
+          <label class="switch"><input type="checkbox" name="roundTrip" ${app.settings.roundTrip ? 'checked' : ''}><span>Hin- und Rückfahrt berechnen</span></label>
+        </div>
         <h3>Beleg, Angebot und Strom</h3>
         <div class="fields">
           <label class="field"><span>Dein Name auf dem Beleg</span><input name="sellerName" value="${esc(app.settings.sellerName)}" autocomplete="name"></label>
@@ -1662,7 +1693,8 @@ const forms = {
     app.settings = await app.backend.saveSettings({
       ...app.settings, spoolTypes, shipping, lowStockPart: f.lowStockPart.value, amsUnits: f.amsUnits.value, roundTo: Number(f.roundTo.value),
       ...Object.fromEntries(['pricePerKg', 'energyPrice', 'printerWatts', 'machineRate', 'failPct', 'laborMinutes', 'laborRate', 'profitPct', 'minPrice',
-        'sellerName', 'powerPayee', 'sellerAddress', 'offerDays', 'defaultInfill', 'discountQty', 'discountPct', 'deliveryPrice'].map((k) => [k, f[k].value])),
+        'sellerName', 'powerPayee', 'sellerAddress', 'offerDays', 'defaultInfill', 'discountQty', 'discountPct', 'deliveryPrice', 'homeAddress', 'kmRate', 'kmCost'].map((k) => [k, f[k].value])),
+      roundTrip: f.roundTrip.checked,
       smallBusiness: f.smallBusiness.checked,
     });
     renderSettings();

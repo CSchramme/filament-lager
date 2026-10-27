@@ -52,7 +52,9 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
 - **API** zum Abrufen: Bestand je Farbe, Material und Platz, einzelne Rollen über ihre Nummer,
   AMS-Belegung (siehe unten).
 - Suchen, filtern (im AMS, geöffnet, ungeöffnet, knapp) und sortieren.
-- Spulen anlegen (auch mehrere gleiche auf einmal), bearbeiten, duplizieren, löschen.
+- Spulen anlegen (auch mehrere gleiche auf einmal), bearbeiten, duplizieren, löschen. Filamentart
+  und **Farbe aus dem Bambu-Lab-Sortiment** wählen wie im Bambu-Shop (46 Filamentarten, über 300
+  Farben mit deutschen Namen).
 - **Import/Export**: CSV im Excel-Format (Semikolon, deutsche Spaltennamen) und JSON-Sicherung des
   ganzen Lagers.
 - **Bambu Filament Manager (Cloud)**: wird automatisch abgeglichen, alle 10 Minuten und beim
@@ -316,13 +318,19 @@ Unter **Verkauf**:
   - **Versand mit DHL** (DHL Päckchen 4,50 €, DHL Paket 6,50 € oder ein anderer Betrag) als feste
     Position. Zu jeder Versandart gehört das Porto, das du selbst zahlst; es zählt als Kosten des
     Belegs und in der Jahresübersicht als Ausgabe.
-  - **Lieferung ohne Post**: du bringst es selbst vorbei, auf Wunsch mit einem Preis (z. B. für die
-    Anfahrt, Standard kostenlos).
+  - **Lieferung ohne Post**: du bringst es selbst vorbei. Der Preis kommt aus der **Entfernung**
+    von deiner Adresse zum Kunden: gefahrene km (hin und zurück) × Preis pro km (Standard 0,30 €)
+    plus ein Grundpreis (Standard 0 €), aufgerundet wie die Teilepreise. Die Strecke berechnet das
+    Lager über OpenStreetMap, sobald der Kunde eine Adresse hat (aus der Kundenliste oder im Dialog
+    eingetragen); die km lassen sich auch von Hand eintragen. Die Fahrt zählt mit deinen Kosten pro
+    km (Standard 0,30 €, die steuerliche Pauschale) als Kosten des Belegs.
   - **Abholung**: der Kunde holt es ab, kostenlos.
 
   Versand und Lieferung zählen nicht zum Mindestpreis. Die Auswahl steht auch als „Übergabe an den
-  Kunden“ im offenen Beleg. Versandarten, Porto und der Preis für die Lieferung ohne Post stehen
-  unter **Einstellungen → Versandarten**.
+  Kunden“ im offenen Beleg. Versandarten, Porto, **deine Adresse**, Preis und Kosten pro km,
+  Grundpreis und „Hin- und Rückfahrt“ stehen unter **Einstellungen → Versandarten**. Für die
+  Entfernung gehen nur die beiden Adressen an OpenStreetMap (Nominatim und OSRM, kostenlos, ohne
+  Anmeldung); das Lager merkt sich gefundene Orte und Strecken.
 - **Angebot**: „Als Angebot speichern“ macht aus dem offenen Beleg ein Angebot mit eigener Nummer
   (A-2026-001, …) und „gültig bis“ (14 Tage, unter Einstellungen änderbar), zum Drucken oder als
   PDF. Sagt der Kunde zu, macht „Beleg“ in der Angebotsliste daraus mit einem Klick einen Beleg mit
@@ -509,7 +517,8 @@ Für Filament, das du bestellt hast, z. B. im Bambu Lab Store (liefert mit DHL):
 1. **Paket eintragen**: im Reiter **Lager** auf „Paket“ tippen, oder in der **Einkaufsliste** auf
    „Bestellt: Paket eintragen“ (übernimmt die Rollen von der Liste). Shop, Bestelldatum,
    **DHL-Sendungsnummer** aus der Versandmail, voraussichtliches Datum und die Rollen im Paket
-   (Filamentart, Farbe, Gewicht, Preis pro Rolle, Anzahl; der Preis kommt aus der Preisliste).
+   (Filamentart, Farbe, Gewicht, Preis pro Rolle, Anzahl; der Preis kommt aus der Preisliste). Die
+   Farbe tippst du aus den Bambu-Farben der gewählten Filamentart an, mit Namen und Suche.
    „Aus der Einkaufsliste“ fügt die Rollen von der Liste hinzu.
 2. Oben im Lager steht dann **Filament unterwegs** mit dem Stand von DHL (z. B. „unterwegs · Bonn“),
    die Kachel „Filament auf Lager“ zählt die Rollen als „unterwegs“. Mit dem DHL-API-Schlüssel

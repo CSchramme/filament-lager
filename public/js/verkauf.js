@@ -2,7 +2,7 @@
 // Kundenliste. Positionen kommen aus dem Rechner, dem Druckverlauf (Reiter
 // "Drucke") oder dem Vorrat.
 import {
-  DELIVERY_MODES, customerText, offerStatus, orderLabel, orderStepAt, orderSteps, salesSummary, trackingLabel, trackingUrl, validTrackingNumber,
+  DELIVERY_MODES, customerText, deliveryQuote, offerStatus, orderLabel, orderStepAt, orderSteps, salesSummary, trackingLabel, trackingUrl, validTrackingNumber,
 } from './domain.js';
 import { openReceipt } from './documents.js';
 import { qrSvg } from './qr.js';
@@ -266,48 +266,96 @@ function manualDialog() {
 }
 
 // Versand als feste Position: Preis für den Kunden, eigene Kosten = Porto
+// Adresse des Kunden aus dem offenen Beleg: aus der Kundenliste oder die
+// Zeilen nach dem Namen
+function draftAddress(draft) {
+  const c = draft.customerId && customers.find((x) => x.id === draft.customerId);
+  if (c) return c.address;
+  return String(draft.customer || '').split('\n').slice(1).join('\n').trim();
+}
+
 // Wie kommt die Bestellung zum Kunden: Versand mit DHL (Position mit Porto),
-// Lieferung ohne Post (auf Wunsch mit Preis, z. B. Anfahrt) oder Abholung.
+// Lieferung ohne Post (Grundpreis + km zum Kunden) oder Abholung.
 // Eine frühere Versand- oder Lieferposition wird ersetzt.
 function shippingDialog() {
   const { settings } = ctx.app;
   const options = settings.shipping;
   const draft = loadDraft();
   const pick = draft.delivery === 'lieferung' ? 'lieferung' : draft.delivery === 'abholung' ? 'abholung' : '0';
+  const server = ctx.app.backend.mode === 'server';
+  const rate = `${fmtEur(settings.kmRate)} pro km${settings.roundTrip ? ', hin und zurück' : ''}`;
+  let trip = null; // Ergebnis der Entfernungsberechnung
   openDialog({
     title: 'Versand, Lieferung oder Abholung',
     body: `<div class="ship-options">${options.map((o, i) => `<label class="switch"><input type="radio" name="option" value="${i}" ${String(i) === pick ? 'checked' : ''}>
         <span>${esc(o.name)} <strong class="num">${fmtEur(o.price)}</strong><small>Porto ${fmtEur(o.cost)}</small></span></label>`).join('')}
         <label class="switch"><input type="radio" name="option" value="own" ${options.length || pick !== '0' ? '' : 'checked'}><span>Anderer Versand-Betrag</span></label>
-        <label class="switch"><input type="radio" name="option" value="lieferung" ${pick === 'lieferung' ? 'checked' : ''}><span>Lieferung ohne Post <strong class="num">${settings.deliveryPrice ? fmtEur(settings.deliveryPrice) : 'kostenlos'}</strong><small>du bringst es selbst vorbei</small></span></label>
+        <label class="switch"><input type="radio" name="option" value="lieferung" ${pick === 'lieferung' ? 'checked' : ''}><span>Lieferung ohne Post <strong class="num">${settings.kmRate ? esc(rate) : settings.deliveryPrice ? fmtEur(settings.deliveryPrice) : 'kostenlos'}</strong><small>du bringst es selbst vorbei${settings.deliveryPrice && settings.kmRate ? `, Grundpreis ${fmtEur(settings.deliveryPrice)}` : ''}</small></span></label>
         <label class="switch"><input type="radio" name="option" value="abholung" ${pick === 'abholung' ? 'checked' : ''}><span>Abholung <strong class="num">kostenlos</strong><small>der Kunde holt es ab</small></span></label></div>
+      <div class="fields trip" data-trip>
+        <label class="field full"><span>Adresse des Kunden</span><textarea name="to" rows="2" placeholder="Straße Nr., PLZ Ort">${esc(draftAddress(draft))}</textarea></label>
+        <label class="field"><span>Entfernung, eine Strecke (km)</span><input name="km" inputmode="decimal" value="${draft.km ? esc(String(draft.km).replace('.', ',')) : ''}" placeholder="z. B. 12"></label>
+        <div class="field"><span>&nbsp;</span><button type="button" class="btn" data-trip-calc ${server ? '' : 'disabled title="nur mit dem Lager-Server"'}>Entfernung berechnen</button></div>
+        <p class="small muted full" data-trip-info>${settings.homeAddress ? `Start: ${esc(settings.homeAddress.replace(/\n+/g, ', '))}` : 'Für die Berechnung unter Einstellungen → Versandarten deine Adresse eintragen.'}</p>
+      </div>
       <div class="fields" data-price>
         <label class="field"><span>Preis für den Kunden (€)</span><input name="price" inputmode="decimal"></label>
         <label class="field"><span>Eigene Kosten (€)</span><input name="cost" inputmode="decimal"><small class="muted" data-cost-hint>Porto</small></label>
         <label class="field full" data-tracking><span>DHL-Sendungsnummer (optional)</span><input name="tracking" autocomplete="off" value="${esc(draft.tracking || '')}"></label>
       </div>
-      <p class="small muted">Versand und Lieferung zählen nicht zum Mindestpreis. Versandarten, Preise und den Preis für die Lieferung ohne Post stehen unter Einstellungen.</p>`,
+      <p class="small muted">Versand und Lieferung zählen nicht zum Mindestpreis. Versandarten, deine Adresse und die Preise pro km stehen unter Einstellungen → Versandarten.</p>`,
     foot: '<span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Übernehmen</button>',
     onReady(dlg, form) {
       const f = form.elements;
+      const money = (x) => x.toFixed(2).replace('.', ',');
+      const info = dlg.querySelector('[data-trip-info]');
+      // Preis und eigene Kosten aus den km
+      const fromKm = () => {
+        const q = deliveryQuote(num(f.km.value || '0'), settings);
+        f.price.value = money(q.price);
+        f.cost.value = money(q.cost);
+        if (!q.km) return;
+        const parts = [`${fmtNum(q.trip, 1)} km${settings.roundTrip ? ' hin und zurück' : ''} × ${fmtEur(settings.kmRate)}`];
+        if (settings.deliveryPrice) parts.push(`Grundpreis ${fmtEur(settings.deliveryPrice)}`);
+        info.textContent = `${trip ? `${trip.from} → ${trip.to}, ca. ${trip.minutes} Min. ` : ''}${parts.join(' + ')} = ${fmtEur(q.raw)}${q.price !== q.raw ? `, aufgerundet ${fmtEur(q.price)}` : ''}. Eigene Kosten ${fmtEur(settings.kmCost)} pro km.`;
+      };
+      const calc = async () => {
+        const b = dlg.querySelector('[data-trip-calc]');
+        b.disabled = true;
+        info.textContent = 'Berechne die Strecke …';
+        try {
+          trip = await ctx.app.backend.distance(f.to.value);
+          f.km.value = String(trip.km).replace('.', ',');
+          fromKm();
+        } catch (err) {
+          info.textContent = `${err.message} Die km kannst du auch von Hand eintragen.`;
+        }
+        b.disabled = !server;
+      };
       const fill = () => {
         const v = f.option.value;
         const o = options[Number(v)];
-        const money = (x) => x.toFixed(2).replace('.', ',');
         dlg.querySelector('[data-price]').hidden = v === 'abholung';
+        dlg.querySelector('[data-trip]').hidden = v !== 'lieferung';
         dlg.querySelector('[data-tracking]').hidden = v === 'lieferung' || v === 'abholung';
-        dlg.querySelector('[data-cost-hint]').textContent = v === 'lieferung' ? 'z. B. Sprit' : 'Porto';
+        dlg.querySelector('[data-cost-hint]').textContent = v === 'lieferung' ? 'Fahrt, z. B. Sprit' : 'Porto';
         if (o) {
           f.price.value = money(o.price);
           f.cost.value = money(o.cost);
         } else if (v === 'lieferung') {
-          f.price.value = money(settings.deliveryPrice);
-          f.cost.value = money(0);
+          fromKm();
+          // Entfernung gleich berechnen, wenn Adressen da sind
+          if (server && !f.km.value && f.to.value.trim() && settings.homeAddress) calc();
         }
       };
       form.addEventListener('change', (e) => {
         if (e.target.name === 'option') fill();
       });
+      f.km.addEventListener('input', () => {
+        trip = null;
+        fromKm();
+      });
+      dlg.querySelector('[data-trip-calc]').addEventListener('click', calc);
       fill();
     },
     onSubmit(form) {
@@ -317,16 +365,19 @@ function shippingDialog() {
       const mode = v === 'lieferung' || v === 'abholung' ? v : 'versand';
       const price = mode === 'abholung' ? 0 : num(f.price.value || '0');
       if (!Number.isFinite(price) || price < 0) throw new Error('Bitte den Preis in Euro eingeben.');
+      const q = deliveryQuote(num(f.km.value || '0'), settings);
       editDraft((d) => {
         d.positions = d.positions.filter((p) => p.kind !== 'versand');
         d.delivery = mode;
+        d.km = mode === 'lieferung' && q.km ? q.km : 0;
         if (mode === 'versand') d.tracking = f.tracking.value.trim();
         else delete d.tracking;
       });
       if (mode === 'versand' || price > 0) {
+        const title = mode === 'versand' ? `Versand${o ? ` (${o.name})` : ''}`
+          : `Lieferung ohne Post${q.km ? ` (${fmtNum(q.trip, 0)} km${settings.roundTrip ? ' hin und zurück' : ''})` : ''}`;
         addPosition({
-          title: mode === 'versand' ? `Versand${o ? ` (${o.name})` : ''}` : 'Lieferung (ohne Post)',
-          qty: 1, manual: true, kind: 'versand', piecePrice: price, pieceCost: Math.max(0, num(f.cost.value) || 0),
+          title, qty: 1, manual: true, kind: 'versand', piecePrice: price, pieceCost: Math.max(0, num(f.cost.value) || 0),
         });
       }
       updateDraft();

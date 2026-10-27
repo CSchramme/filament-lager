@@ -2,9 +2,11 @@
 // "Lager". Den Stand fragt der Server bei DHL ab (mit API-Schlüssel); beim
 // Ankommen werden aus der Lieferung Rollen mit Kaufpreis und Kaufdatum.
 import {
-  COLOR_PRESETS, PURCHASE_WEIGHTS, deliveryItemsFromShopping, filamentTypes, listPrice, listPriceForWeight, normHex, shoppingList,
+  PURCHASE_WEIGHTS, deliveryItemsFromShopping, filamentTypes, listPrice, listPriceForWeight, shoppingList,
   trackingUrl, validTrackingNumber,
 } from './domain.js';
+import { bambuColors } from './bambu-colors.js';
+import { pickColor } from './farben.js';
 import { openLabels } from './labels.js';
 import { trackingHtml, trackShort } from './track.js';
 import {
@@ -36,11 +38,13 @@ export function deliveriesHtml(list) {
       </div>`).join('')}</div>`;
 }
 
+const colorButton = (i) => `<span class="color-dot small-dot" style="background:${esc(i.colorHex)}"></span><span class="${i.colorName ? '' : 'muted'}">${esc(i.colorName || 'Farbe wählen')}</span>`;
+
 function itemRow(i) {
   return `<div class="dl-item">
     <input name="material" list="dl-types" value="${esc(i.material)}" placeholder="Filamentart" aria-label="Filamentart">
-    <input name="colorName" list="dl-colors" value="${esc(i.colorName)}" placeholder="Farbe" aria-label="Farbe">
-    <input name="colorHex" type="color" value="${esc(i.colorHex)}" aria-label="Farbton">
+    <button type="button" class="dl-color" data-dl="color">${colorButton(i)}</button>
+    <input type="hidden" name="colorName" value="${esc(i.colorName)}"><input type="hidden" name="colorHex" value="${esc(i.colorHex)}">
     <select name="purchaseWeight" aria-label="Gewicht">${PURCHASE_WEIGHTS.map((w) => `<option value="${w}" ${w === i.purchaseWeight ? 'selected' : ''}>${kg(w)}</option>`).join('')}</select>
     <input name="price" inputmode="decimal" value="${i.price ? esc(i.price.toFixed(2).replace('.', ',')) : ''}" placeholder="Preis" aria-label="Preis pro Rolle in €">
     <input name="qty" type="number" min="1" max="50" step="1" inputmode="numeric" value="${i.qty}" aria-label="Anzahl">
@@ -53,6 +57,7 @@ function readItems(form) {
     const v = (n) => r.querySelector(`[name="${n}"]`).value;
     return {
       material: v('material').trim(), colorName: v('colorName').trim(), colorHex: v('colorHex'), purchaseWeight: Number(v('purchaseWeight')),
+      brand: bambuColors(v('material')).length ? 'Bambu Lab' : '',
       price: parseNum(v('price')) || 0, qty: Math.max(1, Math.round(Number(v('qty'))) || 1),
     };
   }).filter((i) => i.material);
@@ -89,7 +94,7 @@ export function deliveryDialog(app, delivery = null, { items = null, onDone } = 
         Den Stand des Pakets fragt das Lager mit dem DHL-Schlüssel selbst ab und meldet, wenn es da ist.</p>
       <datalist id="dl-shops">${SHOPS.map((x) => `<option value="${esc(x)}"></option>`).join('')}</datalist>
       <datalist id="dl-types">${filamentTypes(app.spools, app.settings).map((t) => `<option value="${esc(t.material)}"></option>`).join('')}</datalist>
-      <datalist id="dl-colors">${COLOR_PRESETS.map((c) => `<option value="${esc(c.name)}"></option>`).join('')}</datalist>`,
+`,
     foot: `${delivery ? '<button type="button" class="btn danger" data-dl="delete">Löschen</button>' : ''}<span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Speichern</button>`,
     async onSubmit(form) {
       const f = form.elements;
@@ -117,10 +122,6 @@ export function deliveryDialog(app, delivery = null, { items = null, onDone } = 
   form.addEventListener('change', (e) => {
     const row = e.target.closest('.dl-item');
     if (!row) return;
-    if (e.target.name === 'colorName') {
-      const p = COLOR_PRESETS.find((c) => c.name.toLowerCase() === e.target.value.trim().toLowerCase());
-      if (p) row.querySelector('[name="colorHex"]').value = normHex(p.hex);
-    }
     if (e.target.name === 'material' || e.target.name === 'purchaseWeight') {
       const entry = listPrice(row.querySelector('[name="material"]').value, app.settings);
       const price = row.querySelector('[name="price"]');
@@ -136,9 +137,18 @@ export function deliveryDialog(app, delivery = null, { items = null, onDone } = 
     if (b.dataset.dl === 'add-item') {
       const last = readItems(form).pop();
       box.insertAdjacentHTML('beforeend', itemRow(last ? { ...last, colorName: '', colorHex: '#9AA0A6', qty: 1 } : EMPTY_ITEM));
-      box.lastElementChild.querySelector('[name="colorName"]').focus();
+      box.lastElementChild.querySelector('[data-dl="color"]').click(); // gleich die Farbe wählen
     }
     if (b.dataset.dl === 'remove-item') b.closest('.dl-item').remove();
+    if (b.dataset.dl === 'color') {
+      const row = b.closest('.dl-item');
+      const get = (n) => row.querySelector(`[name="${n}"]`);
+      const c = await pickColor({ material: get('material').value, name: get('colorName').value, hex: get('colorHex').value });
+      if (!c) return;
+      get('colorName').value = c.name;
+      get('colorHex').value = c.hex;
+      b.innerHTML = colorButton({ colorName: c.name, colorHex: c.hex });
+    }
     if (b.dataset.dl === 'from-shopping') {
       const fromList = deliveryItemsFromShopping(shoppingList(app.spools, app.settings));
       if (!fromList.length) {

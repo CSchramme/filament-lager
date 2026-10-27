@@ -25,6 +25,7 @@ import {
 } from './notify.js';
 import { Tracker } from './dhl.js';
 import { Backups, withoutSecrets } from './backup.js';
+import { Router } from './route.js';
 
 // Versionskennung der Oberfläche aus Name, Größe und Änderungszeit der Module
 // und Stylesheets. index.html lädt damit "app.js?v=…", sodass der Browser nach
@@ -53,7 +54,7 @@ class HttpError extends Error {
 // bleibt die Schnittstelle gesperrt, damit niemand den Bestand ändern kann.
 export function createApp({
   store, printers, publicDir, password = '', requirePassword = false, cloudFactory = (opts) => new BambuCloud(opts),
-  notifyFetch = (...a) => fetch(...a), dhlFetch = (...a) => fetch(...a), backupDir = path.join(path.dirname(store.file), 'backups'),
+  notifyFetch = (...a) => fetch(...a), dhlFetch = (...a) => fetch(...a), mapFetch = (...a) => fetch(...a), backupDir = path.join(path.dirname(store.file), 'backups'),
 }) {
   const app = express();
   app.disable('x-powered-by');
@@ -549,6 +550,20 @@ export function createApp({
     d.spoolIds = created.map((s) => s.id);
     await store.save(); // vergibt die Rollennummern
     res.json({ item: d, created, spools: store.spools, ...deliveriesView() });
+  });
+
+  // Entfernung von deiner Adresse zum Kunden (Lieferung ohne Post)
+  const router = new Router({ store, fetchFn: mapFetch });
+  app.post('/api/entfernung', async (req, res) => {
+    const to = String((req.body || {}).to || '').trim();
+    const home = store.settings.homeAddress;
+    if (!home) throw new HttpError(400, 'Deine Adresse fehlt: Einstellungen → Versandarten → „Deine Adresse“.');
+    if (!to) throw new HttpError(400, 'Bitte die Adresse des Kunden eintragen.');
+    try {
+      res.json(await router.distance(home, to));
+    } catch (err) {
+      throw new HttpError(502, err.message);
+    }
   });
 
   // Gelöschte Rollen mit Kaufpreis (für die Jahresübersicht)

@@ -9,6 +9,7 @@ import {
 import { seedSpools } from '../public/js/seed.js';
 import { normalizeAutoBook } from './bambu/autobook.js';
 import { normalizeDhl } from './dhl.js';
+import { normalizeGeo } from './route.js';
 import { normalizeNotify } from './notify.js';
 
 function emptyBambu() {
@@ -63,6 +64,7 @@ export function dataFromRaw(raw) {
   data.share = { token: String((raw.share && raw.share.token) || ''), createdAt: String((raw.share && raw.share.createdAt) || '') };
   data.autoBook = normalizeAutoBook(raw.autoBook);
   data.deliveries = (Array.isArray(raw.deliveries) ? raw.deliveries : []).map((x) => normalizeDelivery(x));
+  data.geo = normalizeGeo(raw.geo);
   assignNumbers(data);
   data.settings.places = placeList(data.settings, data.spools);
   const migrated = migratePriceList(raw.settings, data);
@@ -91,7 +93,7 @@ export class Store {
     } else {
       this.data = {
         version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '', tasks: [], sales: [], receiptSeq: {}, powerPayments: [],
-        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [], customers: [], expenses: [], dhl: normalizeDhl(), spoolArchive: [], share: { token: '', createdAt: '' }, autoBook: normalizeAutoBook(), deliveries: [],
+        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [], customers: [], expenses: [], dhl: normalizeDhl(), spoolArchive: [], share: { token: '', createdAt: '' }, autoBook: normalizeAutoBook(), deliveries: [], geo: normalizeGeo(),
       };
       await this.save();
     }

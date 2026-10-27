@@ -57,6 +57,7 @@ class ServerBackend {
   checkTracking(id) { return this.req('POST', 'api/verkaeufe/' + encodeURIComponent(id) + '/sendung/pruefen', {}); }
   dhlSettings() { return this.req('GET', 'api/dhl'); }
   deliveries() { return this.req('GET', 'api/lieferungen'); }
+  distance(to) { return this.req('POST', 'api/entfernung', { to }); }
   addDelivery(d) { return this.req('POST', 'api/lieferungen', d); }
   updateDelivery(id, d) { return this.req('PUT', 'api/lieferungen/' + encodeURIComponent(id), d); }
   deleteDelivery(id) { return this.req('DELETE', 'api/lieferungen/' + encodeURIComponent(id)); }
@@ -361,6 +362,10 @@ class LocalBackend {
   async deleteExpense(id) { return this.removeFrom('expenses', id); }
 
   async spoolArchive() { return { archive: this.load().spoolArchive }; }
+
+  async distance() {
+    throw new Error('Die Entfernung berechnet nur der Lager-Server. Bitte die km von Hand eintragen.');
+  }
 
   // Lieferungen ohne Server: nur Nummer und Link zu dhl.de
   async deliveries() { return { deliveries: this.load().deliveries }; }

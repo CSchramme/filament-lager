@@ -1,6 +1,8 @@
 // Fachlogik des Filament-Lagers. Wird im Browser und im Node-Server genutzt,
 // deshalb ohne Abhängigkeiten und ohne DOM-Zugriffe.
 
+import { bambuMaterials } from './bambu-colors.js';
+
 export const MATERIALS = [
   'PLA Basic', 'PLA Matte', 'PLA Translucent', 'PLA Silk+', 'PLA Tough+', 'PLA Metal', 'PLA Sparkle',
   'PLA Marble', 'PLA Galaxy', 'PLA Glow', 'PLA Wood', 'PLA-CF', 'PETG HF', 'PETG Basic',
@@ -83,7 +85,11 @@ export function defaultSettings() {
     offerDays: 14, // so lange gilt ein Angebot
     defaultInfill: 15, // Infill in % für die Schätzung aus STL-Dateien
     roundTo: 0.5, // Preis pro Teil aufrunden auf (0 = nicht runden)
-    deliveryPrice: 0, // Lieferung ohne Post: Preis für den Kunden (z. B. Anfahrt)
+    deliveryPrice: 0, // Lieferung ohne Post: Grundpreis für den Kunden
+    homeAddress: '', // Start der Fahrt zum Kunden
+    kmRate: 0.3, // Preis pro gefahrenem km für den Kunden
+    kmCost: 0.3, // eigene Kosten pro km (Sprit, Auto)
+    roundTrip: true, // Hin- und Rückfahrt berechnen
     discountQty: 10, // Mengenrabatt ab so vielen Teilen
     discountPct: 10, // … in Prozent (0 = kein Rabatt)
     // Versandarten als feste Position: Preis für den Kunden, eigene Kosten (Porto)
@@ -240,6 +246,10 @@ export function normalizeSettings(input) {
     roundTo: [0, 0.1, 0.5, 1].includes(toMoney(src.roundTo)) ? toMoney(src.roundTo) : base.roundTo,
     discountQty: Math.max(0, toInt(src.discountQty, base.discountQty)),
     deliveryPrice: Math.max(0, toMoney(src.deliveryPrice) ?? base.deliveryPrice),
+    homeAddress: String(src.homeAddress ?? base.homeAddress).trim().slice(0, 300),
+    kmRate: Math.max(0, toMoney(src.kmRate) ?? base.kmRate),
+    kmCost: Math.max(0, toMoney(src.kmCost) ?? base.kmCost),
+    roundTrip: toBool(src.roundTrip, base.roundTrip),
     discountPct: Math.min(90, Math.max(0, toMoney(src.discountPct) ?? base.discountPct)),
     shipping: (Array.isArray(src.shipping) ? src.shipping : base.shipping)
       .map((x) => ({ name: str(x && x.name), price: Math.max(0, toMoney(x && x.price) ?? 0), cost: Math.max(0, toMoney(x && x.cost) ?? 0) }))
@@ -379,7 +389,7 @@ export function filamentTypes(spools, settings) {
   };
   for (const s of spools) add(s.material);
   for (const e of settings.priceList || []) add(e.material);
-  for (const m of MATERIALS) add(m);
+  for (const m of [...MATERIALS, ...bambuMaterials()]) add(m); // dazu das ganze Bambu-Sortiment
   for (const s of spools) byKey.get(s.material.toLowerCase()).count += 1;
   return [...byKey.values()].sort((a, b) => Number(b.count > 0) - Number(a.count > 0) || a.material.localeCompare(b.material, 'de'));
 }
@@ -729,6 +739,18 @@ const DELIVERY_TEXT = {
     zugestellt: ['Geliefert', 'Persönlich übergeben. Viel Freude damit!'],
   },
 };
+
+// Fahrtkosten für die Lieferung ohne Post: Grundpreis + gefahrene km × Preis
+// pro km (hin und zurück, wenn eingestellt), aufgerundet wie die Teilepreise.
+// km: eine Strecke. cost: eigene Kosten für die Fahrt.
+export function deliveryQuote(km, settings) {
+  const oneWay = Math.max(0, Number(km) || 0);
+  const trip = Math.round(oneWay * (settings.roundTrip ? 2 : 1) * 10) / 10;
+  const raw = cents(settings.deliveryPrice + trip * settings.kmRate);
+  return {
+    km: oneWay, trip, raw, price: roundUp(raw, settings.roundTo), cost: cents(trip * settings.kmCost),
+  };
+}
 
 // Wie die Bestellung zum Kunden kommt
 export const DELIVERY_MODES = { versand: 'Versand mit DHL', lieferung: 'Lieferung ohne Post', abholung: 'Abholung' };

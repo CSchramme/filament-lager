@@ -898,12 +898,27 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
 #deliveries .sale-list { display: grid; }
 .delivery-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
 .dl-items { display: grid; gap: 8px; }
-.dl-item { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr) 40px 5.5em 5.5em 4em auto; gap: 6px; align-items: center; }
-.dl-item input[type="color"] { padding: 2px; height: 38px; }
+.dl-item { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.5fr) 5.5em 5.5em 4em auto; gap: 6px; align-items: center; }
+.dl-color { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+.dl-color span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 640px) {
-  /* Filamentart; Farbe, Farbton, Gewicht; Preis, Anzahl, Entfernen */
-  .dl-item { grid-template-columns: minmax(0, 1fr) 44px 4.5em auto; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  /* Filamentart; Farbe, Gewicht; Preis, Anzahl, Entfernen */
+  .dl-item { grid-template-columns: minmax(0, 1fr) 4.5em 4em auto; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
   .dl-item [name="material"] { grid-column: 1 / -1; }
-  .dl-item [name="purchaseWeight"], .dl-item [name="qty"] { grid-column: span 2; }
+  .dl-item [name="purchaseWeight"] { grid-column: 2 / -1; }
+  .dl-item [name="qty"] { grid-column: span 2; }
 }
+
+/* Farbwahl (farben.js) */
+.swatch-head { flex-basis: 100%; }
+.color-search { margin-bottom: 10px; }
+.color-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.color-tile { display: grid; justify-items: center; align-content: start; gap: 4px; padding: 8px 4px; border: 2px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--ink); font: inherit; cursor: pointer; }
+.color-tile:hover { background: var(--surface-2); }
+.color-tile[aria-pressed="true"] { border-color: var(--accent); }
+.color-tile[hidden] { display: none; }
+.color-dot { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); flex: none; }
+.color-dot.small-dot { width: 20px; height: 20px; }
+.color-name { font-size: var(--step--1); text-align: center; line-height: 1.2; overflow-wrap: anywhere; }
+.color-own { margin-top: 12px; }
 .dl-receive { margin: 0; padding-left: 0; list-style: none; display: grid; gap: 4px; }
