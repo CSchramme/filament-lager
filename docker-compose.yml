@@ -1,0 +1,12 @@
+services:
+  filament-lager:
+    build: .
+    container_name: filament-lager
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+    environment:
+      TZ: Europe/Berlin
+      # LAGER_PASSWORT: geheim

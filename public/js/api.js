@@ -1,0 +1,620 @@
+// Datenzugriff der Oberfläche. Läuft die Seite über den Node-Server, gehen
+// alle Änderungen dorthin. Ohne Server (z. B. als statische Seite) speichert
+// das Lager im Browser; die Bambu-Anbindung ist dann nicht verfügbar.
+import {
+  advanceOrder, applyPriceChanges, applyStockSale, archiveSpool, assignNumbers, mergeStock, migratePriceList, newId, nextOfferNr, nextReceiptNr, normalizeCustomer,
+  normalizeArchivedSpool, normalizeExpense, normalizeGift, normalizeOffer, normalizeProduct, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
+  normalizeDelivery, normalizeOrder, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary, setOrderStatus, spoolsFromDelivery,
+} from './domain.js';
+import { seedSpools } from './seed.js';
+
+const needName = (c) => {
+  if (!c.name) throw new Error('Bitte einen Namen eingeben.');
+};
+const needAmount = (x) => {
+  if (!x.amount) throw new Error('Bitte einen Betrag eingeben.');
+};
+
+class ServerBackend {
+  // auth: 'none' (kein Passwort), 'ok' (angemeldet), 'required' (Anmeldung nötig),
+  // 'missing' (Webserver ohne Passwort, gesperrt)
+  constructor(auth) {
+    this.mode = 'server';
+    this.auth = auth || 'none';
+  }
+
+  async req(method, url, body) {
+    const res = await fetch(url, {
+      method,
+      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: 'no-store',
+    });
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    // Sitzung abgelaufen: neu laden zeigt die Anmeldung.
+    if (res.status === 401 && data && data.login) location.reload();
+    if (!res.ok) throw new Error((data && data.error) || `Server antwortet mit ${res.status}.`);
+    return data;
+  }
+
+  appLogin(password) { return this.req('POST', 'api/login', { password }); }
+  appLogout() { return this.req('POST', 'api/logout', {}); }
+  getApiKey() { return this.req('GET', 'api/schluessel').then((d) => d.key); }
+  tasks() { return this.req('GET', 'api/drucke'); }
+  refreshTasks() { return this.req('POST', 'api/drucke/aktualisieren', {}); }
+  bookTask(id) { return this.req('POST', 'api/drucke/' + encodeURIComponent(id) + '/abbuchen', {}); }
+  undoBooking(id) { return this.req('POST', 'api/drucke/' + encodeURIComponent(id) + '/rueckgaengig', {}); }
+  sales() { return this.req('GET', 'api/verkaeufe'); }
+  addSale(sale) { return this.req('POST', 'api/verkaeufe', sale); }
+  updateSale(id, patch) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id), patch); }
+  deleteSale(id) { return this.req('DELETE', 'api/verkaeufe/' + encodeURIComponent(id)); }
+  setTracking(id, number) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id) + '/sendung', { number }); }
+  checkTracking(id) { return this.req('POST', 'api/verkaeufe/' + encodeURIComponent(id) + '/sendung/pruefen', {}); }
+  dhlSettings() { return this.req('GET', 'api/dhl'); }
+  products() { return this.req('GET', 'api/katalog'); }
+  addProduct(x) { return this.req('POST', 'api/katalog', x); }
+  updateProduct(id, x) { return this.req('PUT', 'api/katalog/' + encodeURIComponent(id), x); }
+  deleteProduct(id) { return this.req('DELETE', 'api/katalog/' + encodeURIComponent(id)); }
+  gifts() { return this.req('GET', 'api/geschenke'); }
+  addGift(g) { return this.req('POST', 'api/geschenke', g); }
+  updateGift(id, g) { return this.req('PUT', 'api/geschenke/' + encodeURIComponent(id), g); }
+  deleteGift(id) { return this.req('DELETE', 'api/geschenke/' + encodeURIComponent(id)); }
+  deliveries() { return this.req('GET', 'api/lieferungen'); }
+  distance(to) { return this.req('POST', 'api/entfernung', { to }); }
+  addDelivery(d) { return this.req('POST', 'api/lieferungen', d); }
+  updateDelivery(id, d) { return this.req('PUT', 'api/lieferungen/' + encodeURIComponent(id), d); }
+  deleteDelivery(id) { return this.req('DELETE', 'api/lieferungen/' + encodeURIComponent(id)); }
+  checkDelivery(id) { return this.req('POST', 'api/lieferungen/' + encodeURIComponent(id) + '/pruefen', {}); }
+  receiveDelivery(id, body) { return this.req('POST', 'api/lieferungen/' + encodeURIComponent(id) + '/angekommen', body); }
+  updateOrder(id, body) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id) + '/bestellung', body); }
+  saveDhl(body) { return this.req('PUT', 'api/dhl', body); }
+  notifySettings() { return this.req('GET', 'api/benachrichtigungen'); }
+  saveNotify(body) { return this.req('PUT', 'api/benachrichtigungen', body); }
+  testNotify() { return this.req('POST', 'api/benachrichtigungen/test', {}); }
+  applyPriceList(material, overwrite) { return this.req('POST', 'api/preisliste/uebernehmen', { material, overwrite }); }
+  customers() { return this.req('GET', 'api/kunden'); }
+  addCustomer(c) { return this.req('POST', 'api/kunden', c); }
+  updateCustomer(id, c) { return this.req('PUT', 'api/kunden/' + encodeURIComponent(id), c); }
+  deleteCustomer(id) { return this.req('DELETE', 'api/kunden/' + encodeURIComponent(id)); }
+  expenses() { return this.req('GET', 'api/ausgaben'); }
+  addExpense(x) { return this.req('POST', 'api/ausgaben', x); }
+  updateExpense(id, x) { return this.req('PUT', 'api/ausgaben/' + encodeURIComponent(id), x); }
+  deleteExpense(id) { return this.req('DELETE', 'api/ausgaben/' + encodeURIComponent(id)); }
+  spoolArchive() { return this.req('GET', 'api/rollen-archiv'); }
+  share() { return this.req('GET', 'api/teilen'); }
+  colorShare() { return this.req('GET', 'api/farbkarte/link'); }
+  newColorShare() { return this.req('POST', 'api/farbkarte/link', {}); }
+  stopColorShare() { return this.req('DELETE', 'api/farbkarte/link'); }
+  backups() { return this.req('GET', 'api/sicherungen'); }
+  createBackup() { return this.req('POST', 'api/sicherungen', {}); }
+  restoreBackup(body) { return this.req('POST', 'api/sicherungen/zurueckholen', body); }
+  newShare() { return this.req('POST', 'api/teilen', {}); }
+  stopShare() { return this.req('DELETE', 'api/teilen'); }
+  stock() { return this.req('GET', 'api/vorrat'); }
+  addStock(item) { return this.req('POST', 'api/vorrat', item); }
+  updateStock(id, patch) { return this.req('PUT', 'api/vorrat/' + encodeURIComponent(id), patch); }
+  deleteStock(id) { return this.req('DELETE', 'api/vorrat/' + encodeURIComponent(id)); }
+  offers() { return this.req('GET', 'api/angebote'); }
+  addOffer(offer) { return this.req('POST', 'api/angebote', offer); }
+  acceptOffer(id) { return this.req('POST', 'api/angebote/' + encodeURIComponent(id) + '/beleg', {}); }
+  deleteOffer(id) { return this.req('DELETE', 'api/angebote/' + encodeURIComponent(id)); }
+  powerPayments() { return this.req('GET', 'api/strom'); }
+  addPowerPayment(p) { return this.req('POST', 'api/strom', p); }
+  deletePowerPayment(id) { return this.req('DELETE', 'api/strom/' + encodeURIComponent(id)); }
+  newApiKey() { return this.req('POST', 'api/schluessel', {}).then((d) => d.key); }
+
+  getState() { return this.req('GET', 'api/state'); }
+  createSpools(spools) { return this.req('POST', 'api/spools', { spools }).then((d) => d.spools); }
+  updateSpool(id, patch) { return this.req('PUT', 'api/spools/' + encodeURIComponent(id), patch).then((d) => d.spool); }
+  deleteSpool(id) { return this.req('DELETE', 'api/spools/' + encodeURIComponent(id)); }
+  saveSettings(settings) { return this.req('PUT', 'api/settings', settings).then((d) => d.settings); }
+  importData(mode, spools, settings) { return this.req('POST', 'api/import', { mode, spools, settings }); }
+  moveSpools(ids, target) { return this.req('POST', 'api/spools/move', { ids, target }); }
+  places(action) { return this.req('POST', 'api/places', action); }
+
+  // Bambu
+  bambu() { return this.req('GET', 'api/bambu'); }
+  login(account, password, region) { return this.req('POST', 'api/bambu/cloud/login', { account, password, region }); }
+  loginCode(code) { return this.req('POST', 'api/bambu/cloud/code', { code }); }
+  loginToken(token, region) { return this.req('POST', 'api/bambu/cloud/token', { token, region }); }
+  logout() { return this.req('POST', 'api/bambu/cloud/logout', {}); }
+  pullPreview() { return this.req('GET', 'api/bambu/cloud/pull'); }
+  pull(keys) { return this.req('POST', 'api/bambu/cloud/pull', { keys }); }
+  pushPreview() { return this.req('GET', 'api/bambu/cloud/push'); }
+  push(keys) { return this.req('POST', 'api/bambu/cloud/push', { keys }); }
+  setOptions(options) { return this.req('PUT', 'api/bambu/options', options); }
+  addPrinter(p) { return this.req('POST', 'api/bambu/printers', p); }
+  updatePrinter(id, p) { return this.req('PUT', 'api/bambu/printers/' + encodeURIComponent(id), p); }
+  deletePrinter(id) { return this.req('DELETE', 'api/bambu/printers/' + encodeURIComponent(id)); }
+  amsLink(printerId, slot, spoolId) { return this.req('POST', 'api/bambu/ams/link', { printerId, slot, spoolId }); }
+  amsCreate(printerId, slot) { return this.req('POST', 'api/bambu/ams/create', { printerId, slot }); }
+  amsWeight(printerId, slot, spoolId) { return this.req('POST', 'api/bambu/ams/weight', { printerId, slot, spoolId }); }
+}
+
+const STORAGE_KEY = 'filament-lager-v1';
+
+class LocalBackend {
+  constructor() {
+    this.mode = 'local';
+    this.memory = null;
+  }
+
+  read() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch {
+      // Speicher gesperrt (privates Fenster o. Ä.): im Arbeitsspeicher weiterarbeiten.
+    }
+    return this.memory;
+  }
+
+  write(data) {
+    // Pakete dauerhaft merken, damit ein leeres Paket nicht verschwindet.
+    data.settings.places = placeList(data.settings, data.spools);
+    assignNumbers(data);
+    this.memory = data;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch {
+      // siehe read()
+    }
+  }
+
+  load() {
+    const raw = this.read();
+    if (raw) {
+      const data = {
+        settings: normalizeSettings(raw.settings),
+        spools: (raw.spools || []).map((s) => normalizeSpool(s, { keepTimestamps: true })),
+        nextNr: raw.nextNr,
+        sales: (Array.isArray(raw.sales) ? raw.sales : []).map((x) => normalizeSale(x)),
+        receiptSeq: raw.receiptSeq || {},
+        powerPayments: (Array.isArray(raw.powerPayments) ? raw.powerPayments : []).map((x) => normalizePowerPayment(x)),
+        offers: (Array.isArray(raw.offers) ? raw.offers : []).map((x) => normalizeOffer(x)),
+        offerSeq: raw.offerSeq || {},
+        stock: (Array.isArray(raw.stock) ? raw.stock : []).map((x) => normalizeStockItem(x, { now: x.updatedAt })),
+        customers: (Array.isArray(raw.customers) ? raw.customers : []).map((x) => normalizeCustomer(x)),
+        expenses: (Array.isArray(raw.expenses) ? raw.expenses : []).map((x) => normalizeExpense(x)),
+        spoolArchive: (Array.isArray(raw.spoolArchive) ? raw.spoolArchive : []).map((x) => normalizeArchivedSpool(x)),
+        deliveries: (Array.isArray(raw.deliveries) ? raw.deliveries : []).map((x) => normalizeDelivery(x)),
+        gifts: (Array.isArray(raw.gifts) ? raw.gifts : []).map((x) => normalizeGift(x)),
+        products: (Array.isArray(raw.products) ? raw.products : []).map((x) => normalizeProduct(x, { now: x.updatedAt })),
+      };
+      // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
+      for (const sale of [...data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(data, sale.date);
+      data.settings.places = placeList(data.settings, data.spools);
+      if (migratePriceList(raw.settings, data)) this.write(data);
+      return assignNumbers(data);
+    }
+    const data = {
+      settings: normalizeSettings(), spools: seedSpools(), nextNr: 1, sales: [], receiptSeq: {}, powerPayments: [], offers: [], offerSeq: {}, stock: [],
+      customers: [], expenses: [], spoolArchive: [], deliveries: [], gifts: [], products: [],
+    };
+    this.write(data);
+    return data;
+  }
+
+  async getState() {
+    return this.load();
+  }
+
+  async createSpools(spools) {
+    const data = this.load();
+    const created = spools.map((s) => normalizeSpool({ ...s, id: newId(), bambu: {} }));
+    data.spools.push(...created);
+    this.write(data);
+    return created;
+  }
+
+  async updateSpool(id, patch) {
+    const data = this.load();
+    const idx = data.spools.findIndex((s) => s.id === id);
+    if (idx < 0) throw new Error('Spule nicht gefunden.');
+    const { id: _id, nr, createdAt, ...rest } = patch;
+    data.spools[idx] = normalizeSpool(rest, { base: data.spools[idx] });
+    this.write(data);
+    return data.spools[idx];
+  }
+
+  async deleteSpool(id) {
+    const data = this.load();
+    const spool = data.spools.find((s) => s.id === id);
+    if (spool) data.spoolArchive = archiveSpool(data.spoolArchive, spool, new Date().toISOString());
+    data.spools = data.spools.filter((s) => s.id !== id);
+    this.write(data);
+  }
+
+  async saveSettings(settings) {
+    const data = this.load();
+    data.settings = normalizeSettings(settings);
+    this.write(data);
+    return data.settings;
+  }
+
+  applyChanges(data, changes) {
+    for (const { id, patch } of changes) {
+      const idx = data.spools.findIndex((s) => s.id === id);
+      if (idx >= 0) data.spools[idx] = normalizeSpool(patch, { base: data.spools[idx] });
+    }
+  }
+
+  // Ohne Server gibt es keinen Druckverlauf von Bambu; Verkäufe liegen im Browser.
+  async tasks() {
+    return { connected: false, lastSync: '', tasks: [] };
+  }
+
+  async refreshTasks() {
+    throw new Error('Der Druckverlauf braucht den Lager-Server und eine Bambu-Anmeldung.');
+  }
+
+  salesView(data) {
+    return { sales: data.sales, summary: salesSummary(data.sales), stock: data.stock };
+  }
+
+  async sales() {
+    return this.salesView(this.load());
+  }
+
+  async addSale(sale) {
+    const data = this.load();
+    const created = normalizeSale({ ...sale, id: undefined, createdAt: undefined });
+    applyStockSale(data.stock, created, -1);
+    created.nr = nextReceiptNr(data, created.date);
+    data.sales.unshift(created);
+    this.write(data);
+    return { sale: created, ...this.salesView(data) };
+  }
+
+  async updateSale(id, patch) {
+    const data = this.load();
+    data.sales = data.sales.map((x) => (x.id === id ? normalizeSale({ ...x, ...patch, id: x.id, nr: x.nr, createdAt: x.createdAt }) : x));
+    this.write(data);
+    return this.salesView(data);
+  }
+
+  // Ohne Server nur die Nummer und der Link zu dhl.de
+  async setTracking(id, number) {
+    const data = this.load();
+    const sale = data.sales.find((x) => x.id === id);
+    if (!sale) throw new Error('Beleg nicht gefunden.');
+    if (!number) sale.tracking = null;
+    else if (!sale.tracking || sale.tracking.number !== number) sale.tracking = normalizeTracking({ number });
+    if (number) {
+      sale.order.delivery = 'versand';
+      advanceOrder(sale.order, 'versendet');
+    }
+    this.write(data);
+    return { sale, ...this.salesView(data) };
+  }
+
+  // Status ohne Server; einen Link für Kunden gibt es nur mit Server
+  async updateOrder(id, b) {
+    if (b.link === 'neu') throw new Error('Einen Link für Kunden gibt es nur mit dem Lager-Server.');
+    const data = this.load();
+    const sale = data.sales.find((x) => x.id === id);
+    if (!sale) throw new Error('Beleg nicht gefunden.');
+    const o = sale.order;
+    if (b.status === '') Object.assign(o, { status: '', history: [], token: '', printJob: null });
+    else if (b.status) setOrderStatus(o, b.status);
+    if (b.delivery !== undefined) o.delivery = b.delivery;
+    if (b.expectedAt !== undefined) o.expectedAt = b.expectedAt;
+    if (b.note !== undefined) o.note = b.note;
+    if (b.link === 'weg') o.token = '';
+    sale.order = normalizeOrder(o);
+    this.write(data);
+    return { sale, ...this.salesView(data) };
+  }
+
+  async checkTracking() {
+    throw new Error('Den Stand der Sendung fragt nur der Lager-Server bei DHL ab.');
+  }
+
+  async dhlSettings() {
+    return { hasKey: false, lastCheckAt: '', lastError: '' };
+  }
+
+  async applyPriceList(material, overwrite) {
+    const data = this.load();
+    const changed = applyPriceChanges(data.spools, priceListChanges(data.spools, data.settings, { material, overwrite }));
+    this.write(data);
+    return { changed, spools: data.spools };
+  }
+
+  // Listen wie auf dem Server (Kunden, Ausgaben)
+  listOf(key) {
+    return { [key]: this.load()[key] };
+  }
+
+  addTo(key, normalize, input, check) {
+    const data = this.load();
+    const item = normalize({ ...input, id: undefined, createdAt: undefined });
+    check(item);
+    data[key].unshift(item);
+    this.write(data);
+    return { item, [key]: data[key] };
+  }
+
+  updateIn(key, normalize, id, input, check) {
+    const data = this.load();
+    const idx = data[key].findIndex((x) => x.id === id);
+    if (idx < 0) throw new Error('Eintrag nicht gefunden.');
+    const item = normalize({ ...data[key][idx], ...input, id, createdAt: data[key][idx].createdAt });
+    check(item);
+    data[key][idx] = item;
+    this.write(data);
+    return { item, [key]: data[key] };
+  }
+
+  removeFrom(key, id) {
+    const data = this.load();
+    data[key] = data[key].filter((x) => x.id !== id);
+    this.write(data);
+    return { [key]: data[key] };
+  }
+
+  async customers() { return this.listOf('customers'); }
+
+  async addCustomer(c) { return this.addTo('customers', normalizeCustomer, c, needName); }
+
+  async updateCustomer(id, c) { return this.updateIn('customers', normalizeCustomer, id, c, needName); }
+
+  async deleteCustomer(id) { return this.removeFrom('customers', id); }
+
+  async products() { return this.listOf('products'); }
+
+  async addProduct(x) { return this.addTo('products', normalizeProduct, x, needName); }
+
+  async updateProduct(id, x) { return this.updateIn('products', normalizeProduct, id, x, needName); }
+
+  async deleteProduct(id) { return this.removeFrom('products', id); }
+
+  async expenses() { return this.listOf('expenses'); }
+
+  async addExpense(x) { return this.addTo('expenses', normalizeExpense, x, needAmount); }
+
+  async updateExpense(id, x) { return this.updateIn('expenses', normalizeExpense, id, x, needAmount); }
+
+  async deleteExpense(id) { return this.removeFrom('expenses', id); }
+
+  async spoolArchive() { return { archive: this.load().spoolArchive }; }
+
+  async distance() {
+    throw new Error('Die Entfernung berechnet nur der Lager-Server. Bitte die km von Hand eintragen.');
+  }
+
+  // Verschenkt
+  async gifts() {
+    const data = this.load();
+    return { gifts: data.gifts, stock: data.stock };
+  }
+
+  async addGift(input) {
+    const data = this.load();
+    const gift = normalizeGift({ ...input, id: undefined, createdAt: undefined });
+    if (!gift.customer) throw new Error('Bitte eintragen, wem du es geschenkt hast.');
+    if (!gift.items.length) throw new Error('Es fehlt, was verschenkt wurde.');
+    applyStockSale(data.stock, gift, -1, 'given');
+    data.gifts.unshift(gift);
+    this.write(data);
+    return { item: gift, gifts: data.gifts, stock: data.stock };
+  }
+
+  async updateGift(id, b) {
+    const data = this.load();
+    const old = data.gifts.find((x) => x.id === id);
+    if (!old) throw new Error('Eintrag nicht gefunden.');
+    const item = normalizeGift({
+      ...old, date: b.date ?? old.date, customer: b.customer ?? old.customer, customerId: b.customerId ?? old.customerId, reason: b.reason ?? old.reason, note: b.note ?? old.note,
+    });
+    data.gifts = data.gifts.map((x) => (x.id === id ? item : x));
+    this.write(data);
+    return { item, gifts: data.gifts, stock: data.stock };
+  }
+
+  async deleteGift(id) {
+    const data = this.load();
+    const gift = data.gifts.find((x) => x.id === id);
+    if (gift) applyStockSale(data.stock, gift, +1, 'given');
+    data.gifts = data.gifts.filter((x) => x.id !== id);
+    this.write(data);
+    return { gifts: data.gifts, stock: data.stock };
+  }
+
+  // Lieferungen ohne Server: nur Nummer und Link zu dhl.de
+  async deliveries() { return { deliveries: this.load().deliveries }; }
+
+  async addDelivery(input) {
+    const data = this.load();
+    const { number, ...rest } = input;
+    const item = normalizeDelivery({ ...rest, id: undefined, createdAt: undefined, tracking: number ? { number } : null });
+    data.deliveries.unshift(item);
+    this.write(data);
+    return { item, deliveries: data.deliveries };
+  }
+
+  async updateDelivery(id, input) {
+    const data = this.load();
+    const old = data.deliveries.find((x) => x.id === id);
+    if (!old) throw new Error('Lieferung nicht gefunden.');
+    const { number, ...rest } = input;
+    const n = number === undefined ? (old.tracking ? old.tracking.number : '') : String(number || '').replace(/\s+/g, '').toUpperCase();
+    const tracking = old.tracking && old.tracking.number === n ? old.tracking : n ? { number: n } : null;
+    const item = normalizeDelivery({ ...old, ...rest, tracking, id, createdAt: old.createdAt });
+    data.deliveries = data.deliveries.map((x) => (x.id === id ? item : x));
+    this.write(data);
+    return { item, deliveries: data.deliveries };
+  }
+
+  async deleteDelivery(id) { return this.removeFrom('deliveries', id); }
+
+  async receiveDelivery(id, b = {}) {
+    const data = this.load();
+    const d = data.deliveries.find((x) => x.id === id);
+    if (!d) throw new Error('Lieferung nicht gefunden.');
+    if (d.receivedAt) throw new Error('Diese Lieferung ist schon im Lager.');
+    const created = b.createSpools === false ? [] : spoolsFromDelivery(d, { location: String(b.location || '').trim() }).map((s) => normalizeSpool({ ...s, id: newId(), bambu: {} }));
+    data.spools.push(...created);
+    d.receivedAt = new Date().toISOString();
+    d.spoolIds = created.map((s) => s.id);
+    this.write(data);
+    return {
+      item: d, created, spools: data.spools, deliveries: data.deliveries,
+    };
+  }
+
+  async stock() {
+    return { stock: this.load().stock };
+  }
+
+  async addStock(input) {
+    const data = this.load();
+    const batch = normalizeStockItem({ ...input, id: undefined, sold: 0 });
+    if (!batch.made) throw new Error('Bitte angeben, wie viele Teile gedruckt wurden.');
+    const idx = input.merge === false ? -1 : data.stock.findIndex((x) => x.title.toLowerCase() === batch.title.toLowerCase());
+    let item;
+    if (idx >= 0) {
+      item = mergeStock(data.stock[idx], batch);
+      data.stock[idx] = item;
+    } else {
+      item = batch;
+      data.stock.unshift(item);
+    }
+    this.write(data);
+    return { item, merged: idx >= 0, stock: data.stock };
+  }
+
+  async updateStock(id, patch) {
+    const data = this.load();
+    const idx = data.stock.findIndex((x) => x.id === id);
+    if (idx < 0) throw new Error('Teil nicht im Vorrat.');
+    const cur = data.stock[idx];
+    data.stock[idx] = normalizeStockItem({
+      ...cur, title: patch.title ?? cur.title, price: patch.price ?? cur.price, onHand: patch.onHand ?? cur.onHand,
+    });
+    this.write(data);
+    return { item: data.stock[idx], stock: data.stock };
+  }
+
+  async deleteStock(id) {
+    const data = this.load();
+    data.stock = data.stock.filter((x) => x.id !== id);
+    this.write(data);
+    return { stock: data.stock };
+  }
+
+  async offers() {
+    return { offers: this.load().offers };
+  }
+
+  async addOffer(input) {
+    const data = this.load();
+    const offer = normalizeOffer({ ...input, id: undefined, createdAt: undefined, saleId: '', saleNr: '', acceptedAt: '' }, { days: data.settings.offerDays });
+    offer.nr = nextOfferNr(data, offer.date);
+    data.offers.unshift(offer);
+    this.write(data);
+    return { offer, offers: data.offers };
+  }
+
+  async acceptOffer(id) {
+    const data = this.load();
+    const offer = data.offers.find((x) => x.id === id);
+    if (!offer) throw new Error('Angebot nicht gefunden.');
+    if (offer.saleNr) throw new Error(`Aus diesem Angebot wurde schon Beleg ${offer.saleNr}.`);
+    const sale = normalizeSale(saleFromOffer(offer));
+    applyStockSale(data.stock, sale, -1);
+    sale.nr = nextReceiptNr(data, sale.date);
+    data.sales.unshift(sale);
+    Object.assign(offer, { saleId: sale.id, saleNr: sale.nr, acceptedAt: new Date().toISOString() });
+    this.write(data);
+    return {
+      sale, offer, offers: data.offers, ...this.salesView(data),
+    };
+  }
+
+  async deleteOffer(id) {
+    const data = this.load();
+    data.offers = data.offers.filter((x) => x.id !== id);
+    this.write(data);
+    return { offers: data.offers };
+  }
+
+  async powerPayments() {
+    return { payments: this.load().powerPayments };
+  }
+
+  async addPowerPayment(p) {
+    const data = this.load();
+    const payment = normalizePowerPayment({ ...p, id: undefined });
+    data.powerPayments.unshift(payment);
+    this.write(data);
+    return { payment, payments: data.powerPayments };
+  }
+
+  async deletePowerPayment(id) {
+    const data = this.load();
+    data.powerPayments = data.powerPayments.filter((x) => x.id !== id);
+    this.write(data);
+    return { payments: data.powerPayments };
+  }
+
+  async deleteSale(id) {
+    const data = this.load();
+    const sale = data.sales.find((x) => x.id === id);
+    if (sale) applyStockSale(data.stock, sale, +1);
+    data.sales = data.sales.filter((x) => x.id !== id);
+    this.write(data);
+    return this.salesView(data);
+  }
+
+  async moveSpools(ids, target) {
+    const data = this.load();
+    const changes = planMove(data.spools, ids, target);
+    this.applyChanges(data, changes);
+    this.write(data);
+    return { spools: data.spools, swapped: changes.filter((c) => c.swapped).map((c) => c.id) };
+  }
+
+  async places(action) {
+    const data = this.load();
+    const plan = planPlaces(data.settings, data.spools, action);
+    data.settings = normalizeSettings({ ...data.settings, places: plan.places });
+    this.applyChanges(data, plan.changes);
+    this.write(data);
+    return data;
+  }
+
+  async importData(mode, spools = [], settings) {
+    const data = this.load();
+    if (settings) data.settings = normalizeSettings(settings);
+    else if (mode !== 'append') data.settings.places = [];
+    if (mode !== 'append') data.nextNr = 1; // Nummerierung beginnt neu
+    if (mode === 'seed') {
+      data.spools = seedSpools();
+    } else {
+      const ids = new Set(mode === 'replace' ? [] : data.spools.map((s) => s.id));
+      const incoming = spools.map((s) => normalizeSpool(ids.has(s.id) ? { ...s, id: newId() } : s, { keepTimestamps: true }));
+      data.spools = mode === 'replace' ? incoming : [...data.spools, ...incoming];
+    }
+    this.write(data);
+    return data;
+  }
+}
+
+export async function createBackend() {
+  try {
+    const res = await fetch('api/health', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.mode === 'server') return new ServerBackend(data.auth);
+    }
+  } catch {
+    // kein Server erreichbar
+  }
+  return new LocalBackend();
+}
