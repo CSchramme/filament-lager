@@ -169,6 +169,25 @@ export function computeStats({
 // höchstens 25.000 €, im laufenden Jahr höchstens 100.000 €.
 export const SMALL_BUSINESS = { prev: 25000, current: 100000 };
 
+// Stufen für die Warnung (nur mit "Kleinunternehmer" in den Einstellungen)
+export const TAX_STEPS = [
+  { at: 20000, title: 'Umsatz bei 20.000 €', text: 'Noch 5.000 € bis 25.000 €. Liegt der Umsatz in diesem Jahr über 25.000 €, gilt die Kleinunternehmerregelung ab dem nächsten Jahr nicht mehr.' },
+  { at: 25000, title: 'Umsatz über 25.000 €', text: 'Ab dem nächsten Jahr gilt die Kleinunternehmerregelung nicht mehr, dann mit Umsatzsteuer. Am besten mit dem Steuerberater sprechen.' },
+  { at: 80000, title: 'Umsatz bei 80.000 €', text: 'Ab dem Umsatz, mit dem 100.000 € im Jahr überschritten werden, fällt sofort Umsatzsteuer an.' },
+  { at: 100000, title: 'Umsatz über 100.000 €', text: 'Ab jetzt fällt Umsatzsteuer an. Bitte sofort mit dem Steuerberater sprechen.' },
+];
+
+// Umsatz im Jahr (Belege) und die höchste erreichte Stufe
+export function taxStatus(sales, year) {
+  const y = String(year);
+  const revenue = Math.round(sales.filter((s) => String(s.date || '').startsWith(y + '-')).reduce((a, s) => a + s.price, 0) * 100) / 100;
+  const step = [...TAX_STEPS].reverse().find((t) => revenue >= t.at) || null;
+  const next = TAX_STEPS.find((t) => revenue < t.at) || null;
+  return {
+    year: y, revenue, step, next,
+  };
+}
+
 export function yearsWithData({
   sales = [], spools = [], archive = [], powerPayments = [], expenses = [], now = new Date().toISOString(),
 }) {

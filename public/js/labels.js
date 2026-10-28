@@ -3,7 +3,9 @@
 // direkt zum Wiegen (#rolle/12). Gedruckt wird über ein eigenes Fenster.
 import { spoolTypeOf } from './domain.js';
 import { qrSvg } from './qr.js';
-import { esc, fmt, toast } from './ui.js';
+import {
+  DOC_SCRIPT, esc, fmt, showDocument, toast,
+} from './ui.js';
 
 // Breite, Höhe, QR-Größe in mm
 const FORMATS = {
@@ -41,16 +43,10 @@ export function openLabels(spools, settings) {
     toast('Keine Rollen ausgewählt.', 'error');
     return;
   }
-  const w = window.open('', '_blank');
-  if (!w) {
-    toast('Das Fenster wurde blockiert. Bitte Pop-ups für diese Seite erlauben.', 'error');
-    return;
-  }
   const formats = Object.entries(FORMATS);
   const css = formats.map(([k, f]) => `body[data-format="${k}"] { --w: ${f.w}mm; --h: ${f.h}mm; --qr: ${f.qr}mm; }`).join('\n');
-  w.document.open();
-  w.document.write(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Etiketten</title>
+  showDocument(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Etiketten</title>${DOC_SCRIPT}
     <style id="page">${pageCss(FORMATS.e50)}</style>
     <style>
       * { box-sizing: border-box; }
@@ -85,7 +81,7 @@ export function openLabels(spools, settings) {
     <div class="bar">
       <select id="format" aria-label="Format">${formats.map(([k, f]) => `<option value="${k}">${esc(f.name)}</option>`).join('')}</select>
       <button class="primary" type="button" onclick="window.print()">Drucken</button>
-      <button type="button" onclick="window.close()">Schließen</button>
+      <button type="button" onclick="closeDoc()">Schließen</button>
       <p class="hint">${list.length} ${list.length === 1 ? 'Etikett' : 'Etiketten'}. Im Druckdialog „Ränder: keine“ und 100 % Größe wählen.
         Den QR-Code mit der Handykamera scannen, dann öffnet sich die Rolle zum Wiegen.</p>
     </div>
@@ -104,5 +100,4 @@ export function openLabels(spools, settings) {
       try { setFormat(localStorage.getItem('filament-lager-etikett') || 'e50'); } catch (e) { setFormat('e50'); }
     </script>
     </body></html>`);
-  w.document.close();
 }

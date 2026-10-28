@@ -3,7 +3,7 @@
 // wählen oder im Druckdialog "Als PDF sichern".
 import { trackingUrl } from './domain.js';
 import {
-  esc, fmtCt, fmtDuration, fmtEur, fmtNum, toast,
+  DOC_SCRIPT, esc, fmtCt, fmtDuration, fmtEur, fmtNum, showDocument,
 } from './ui.js';
 
 const STYLE = `
@@ -40,17 +40,10 @@ const STYLE = `
   }`;
 
 export function openDocument(title, body) {
-  const w = window.open('', '_blank');
-  if (!w) {
-    toast('Das Fenster wurde blockiert. Bitte Pop-ups für diese Seite erlauben.', 'error');
-    return;
-  }
-  w.document.open();
-  w.document.write(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>${esc(title)}</title><style>${STYLE}</style></head><body>
-    <div class="bar"><button class="primary" onclick="window.print()">Drucken oder als PDF speichern</button><button onclick="window.close()">Schließen</button></div>
+  showDocument(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>${esc(title)}</title><style>${STYLE}</style>${DOC_SCRIPT}</head><body>
+    <div class="bar"><button class="primary" onclick="window.print()">Drucken oder als PDF speichern</button><button onclick="closeDoc()">Schließen</button></div>
     <div class="page">${body}</div></body></html>`);
-  w.document.close();
 }
 
 const date = (iso) => (iso ? new Date(iso).toLocaleDateString('de-DE') : '');

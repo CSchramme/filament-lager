@@ -398,7 +398,7 @@ test('Benachrichtigungen einrichten, testen und knappe Rollen melden', async () 
   assert.equal(on.status, 200);
   assert.deepEqual([on.body.enabled, on.body.hasToken, on.body.token], [true, true, undefined]);
   assert.deepEqual(on.body.events, {
-    done: true, failed: true, paused: false, low: true, delivered: true,
+    done: true, failed: true, paused: false, low: true, delivered: true, umsatz: true,
   });
   ntfy.length = 0;
   const t = await call('POST', '/api/benachrichtigungen/test', {});

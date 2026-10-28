@@ -102,6 +102,41 @@ export function openDialog({ title, body, foot, onSubmit, onReady }) {
   return dlg;
 }
 
+// Läuft das Lager als App vom Home-Bildschirm (ohne Browserleiste)?
+export const isStandalone = () => Boolean((window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone);
+
+// Druckbare Seite (Beleg, Etiketten …) in einem neuen Fenster. Als App vom
+// Home-Bildschirm gibt es keine Fenster; dann liegt die Seite über der App.
+// Die Seite schließt sich mit closeDoc() (siehe DOC_SCRIPT).
+export const DOC_SCRIPT = '<script>function closeDoc(){if(window.parent!==window)parent.postMessage("doc-close","*");else window.close();}</script>';
+export function showDocument(html) {
+  if (isStandalone()) {
+    const box = document.createElement('div');
+    box.className = 'doc-overlay';
+    const frame = document.createElement('iframe');
+    frame.title = 'Dokument';
+    frame.srcdoc = html;
+    box.append(frame);
+    document.body.append(box);
+    const onMessage = (e) => {
+      if (e.data !== 'doc-close' || e.source !== frame.contentWindow) return;
+      box.remove();
+      window.removeEventListener('message', onMessage);
+    };
+    window.addEventListener('message', onMessage);
+    return true;
+  }
+  const w = window.open('', '_blank');
+  if (!w) {
+    toast('Das Fenster wurde blockiert. Bitte Pop-ups für diese Seite erlauben.', 'error');
+    return false;
+  }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  return true;
+}
+
 export function download(filename, text, type) {
   const url = URL.createObjectURL(new Blob([text], { type }));
   const a = document.createElement('a');

@@ -929,3 +929,7 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
   .gift-row { grid-template-columns: minmax(0, 1fr) auto auto; }
   .gift-row > :nth-child(4) { display: inline-flex; }
 }
+
+/* Beleg und Etiketten über der App (als App vom Home-Bildschirm) */
+.doc-overlay { position: fixed; inset: 0; z-index: 1000; background: #EEF1F4; padding-top: env(safe-area-inset-top, 0px); }
+.doc-overlay iframe { display: block; width: 100%; height: 100%; border: 0; background: #EEF1F4; }

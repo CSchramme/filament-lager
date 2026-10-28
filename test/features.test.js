@@ -191,7 +191,7 @@ test('Benachrichtigung: Fehler und Prüfung der Einstellungen', async () => {
   assert.throws(() => validateNotify({ server: 'https://ntfy.sh', topic: 'a b' }), /Thema/);
   assert.doesNotThrow(() => validateNotify({ server: 'https://ntfy.example.de', topic: 'mein_thema-1' }));
   assert.deepEqual(normalizeNotify({ server: 'https://ntfy.sh///', events: { low: false } }).events, {
-    done: true, failed: true, paused: true, low: false, delivered: true,
+    done: true, failed: true, paused: true, low: false, delivered: true, umsatz: true,
   });
 });
 
@@ -527,4 +527,33 @@ test('Verschenkt: Selbstkosten, Vorrat, wer danach bestellt hat', async () => {
   assert.deepEqual(giftSummary([g, tom], sales), {
     count: 2, pieces: 3, people: 2, cost: 0.88, ordered: 1,
   });
+});
+
+test('Kleinunternehmer: Warnung bei 20.000, 25.000, 80.000 und 100.000 € Umsatz', async () => {
+  const { taxStatus } = await import('../public/js/stats.js');
+  const sale = (date, price) => normalizeSale({ date, items: [{ title: 'A', qty: 1, price }] });
+  const sales = [sale('2026-03-01', 15000), sale('2025-12-30', 30000)];
+  assert.equal(taxStatus(sales, 2026).step, null);
+  assert.equal(taxStatus(sales, 2026).next.at, 20000);
+  sales.push(sale('2026-09-01', 6000));
+  assert.deepEqual([taxStatus(sales, 2026).revenue, taxStatus(sales, 2026).step.at], [21000, 20000]);
+  // Benachrichtigung: jede Stufe einmal, nur mit Kleinunternehmer
+  const sent = [];
+  const store = { data: { sales, settings: normalizeSettings({ smallBusiness: true }), spools: [], notify: normalizeNotify({ enabled: true, topic: 'filament-lager-test' }) } };
+  const n = new Notifier({ store, fetchFn: async (url, opts) => { sent.push(JSON.parse(opts.body)); return { ok: true }; } });
+  n.checkTax(new Date('2026-10-28T12:00:00'));
+  n.checkTax(new Date('2026-10-28T12:00:00'));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].title, 'Umsatz bei 20.000 €');
+  assert.match(sent[0].message, /21\.000,00/);
+  sales.push(sale('2026-10-01', 5000));
+  n.checkTax(new Date('2026-10-28T12:00:00'));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(sent.map((x) => x.title), ['Umsatz bei 20.000 €', 'Umsatz über 25.000 €']);
+  store.data.settings.smallBusiness = false;
+  sales.push(sale('2026-10-02', 60000));
+  n.checkTax(new Date('2026-10-28T12:00:00'));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(sent.length, 2);
 });

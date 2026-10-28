@@ -5,8 +5,9 @@
 // Das Thema ist zufällig und wirkt wie ein Passwort: Wer es kennt, liest mit.
 import crypto from 'node:crypto';
 import { stockLevel } from '../public/js/domain.js';
+import { taxStatus } from '../public/js/stats.js';
 
-export const EVENTS = ['done', 'failed', 'paused', 'low', 'delivered'];
+export const EVENTS = ['done', 'failed', 'paused', 'low', 'delivered', 'umsatz'];
 
 export function newTopic() {
   return 'filament-lager-' + crypto.randomBytes(8).toString('hex');
@@ -23,6 +24,7 @@ export function normalizeNotify(input) {
     appUrl: String(src.appUrl || ''),
     events: Object.fromEntries(EVENTS.map((k) => [k, events[k] !== false])),
     lowNotified: Array.isArray(src.lowNotified) ? src.lowNotified.map(String) : [],
+    taxNotified: src.taxNotified && typeof src.taxNotified === 'object' ? { ...src.taxNotified } : {}, // Jahr -> gemeldete Stufe
     lastSentAt: String(src.lastSentAt || ''),
     lastError: String(src.lastError || ''),
   };
@@ -138,6 +140,24 @@ export class Notifier {
         view: 'lager',
       });
     }
+  }
+
+  // Kleinunternehmer: Umsatz erreicht eine neue Stufe (20.000, 25.000, 80.000,
+  // 100.000 €) -> einmal melden.
+  checkTax(now = new Date()) {
+    const { sales, settings } = this.store.data;
+    if (!settings.smallBusiness) return;
+    const c = this.config;
+    const t = taxStatus(sales, now.getFullYear());
+    if (!t.step || (c.taxNotified[t.year] || 0) >= t.step.at) return;
+    c.taxNotified[t.year] = t.step.at;
+    this.notify('umsatz', {
+      title: t.step.title,
+      message: `Umsatz ${t.year} bisher ${t.revenue.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}. ${t.step.text}`,
+      tags: ['warning'],
+      priority: 4,
+      view: 'auswertung',
+    });
   }
 
   // Beim Einschalten: was jetzt schon knapp ist, nicht noch einmal melden.

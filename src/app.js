@@ -250,7 +250,10 @@ export function createApp({
 
   // Benachrichtigungen: knappe Rollen bei jedem Speichern, Druckstatus bei jeder Meldung.
   const notifier = new Notifier({ store, fetchFn: notifyFetch });
-  store.beforeSave = () => notifier.checkStock();
+  store.beforeSave = () => {
+    notifier.checkStock();
+    notifier.checkTax();
+  };
   const tracker = new Tracker({ store, notifier, fetchFn: dhlFetch });
 
   if (printers) {

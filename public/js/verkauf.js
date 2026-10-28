@@ -5,6 +5,7 @@ import {
   DELIVERY_MODES, GIFT_REASONS, customerText, deliveryQuote, giftFollowUp, giftSummary, offerStatus, sameCustomer, stockSaleItem, orderLabel, orderStepAt, orderSteps, salesSummary, trackingLabel, trackingUrl, validTrackingNumber,
 } from './domain.js';
 import { openReceipt } from './documents.js';
+import { taxStatus } from './stats.js';
 import { qrSvg } from './qr.js';
 import { timeDe, trackingHtml, trackShort } from './track.js';
 import {
@@ -588,6 +589,7 @@ function updateSales() {
       ${tile('Umsatz gesamt', fmtEur(t.revenue), `${plural(t.count, 'Beleg', 'Belege')}, ${t.pieces} Stück`)}
       ${tile('Gewinn gesamt', fmtEur(t.profit), `Kosten ${fmtEur(t.cost)}`)}
     </div>
+    ${taxNote()}
     ${openOrdersHtml()}
     ${sales.sales.length ? `<div class="sale-list">${sales.sales.slice(0, 50).map((s) => `
       <div class="sale-row receipt-row">
@@ -602,6 +604,13 @@ function updateSales() {
         <button type="button" class="icon-btn" data-sales="delete" data-id="${esc(s.id)}" aria-label="Beleg löschen">×</button>
       </div>`).join('')}</div>`
     : '<p class="small muted">Noch keine Belege.</p>'}`;
+}
+
+// Kleinunternehmer: Hinweis ab 20.000 € Umsatz im Jahr
+function taxNote() {
+  if (!ctx.app.settings.smallBusiness) return '';
+  const t = taxStatus(sales.sales, new Date().getFullYear());
+  return t.step ? `<div class="note warn small"><strong>${esc(t.step.title)}</strong> (${fmtEur(t.revenue)} in ${t.year}). ${esc(t.step.text)}</div>` : '';
 }
 
 // Bestellstatus oder Sendung als Knopf in der Belegliste
