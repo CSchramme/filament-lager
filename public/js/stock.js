@@ -76,7 +76,10 @@ export function addStockDialog(app, {
 
 // Verkaufen: gleich als Beleg speichern oder in den offenen Beleg legen.
 // customers: Kundenliste zur Auswahl; ein neuer Name wird als Kunde gespeichert.
-export function sellDialog(app, item, { onSold, onDraft, customers = [] } = {}) {
+// onGift({ qty, name }): stattdessen verschenken (Probe)
+export function sellDialog(app, item, {
+  onSold, onDraft, onGift, customers = [],
+} = {}) {
   openDialog({
     title: `${esc(item.title)} verkaufen`,
     body: `<p class="small muted">Noch ${item.onHand} Stück im Vorrat. Selbstkosten ${fmtEur(item.parts.cost)} pro Stück.</p>
@@ -88,7 +91,7 @@ export function sellDialog(app, item, { onSold, onDraft, customers = [] } = {}) 
       </div>
       <label class="switch"><input type="checkbox" name="show"><span>Beleg gleich zum Drucken öffnen</span></label>
       <p class="small muted" data-sum></p>`,
-    foot: '<button type="button" class="btn" data-draft>In den offenen Beleg</button><span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Verkauft</button>',
+    foot: `<button type="button" class="btn" data-draft>In den offenen Beleg</button>${onGift ? '<button type="button" class="btn" data-gift>Verschenken</button>' : ''}<span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Verkauft</button>`,
     onReady(dlg, form) {
       const f = form.elements;
       const update = () => {
@@ -103,6 +106,15 @@ export function sellDialog(app, item, { onSold, onDraft, customers = [] } = {}) 
       combobox(f.customer, {
         options: () => customers.map((c) => ({ value: c.name, hint: c.address.split('\n').pop() })),
         newLabel: (v) => `„${v}“ als neuen Kunden`,
+      });
+      dlg.querySelector('[data-gift]')?.addEventListener('click', () => {
+        const n = Math.max(1, Math.round(num(f.qty.value)) || 1);
+        if (n > item.onHand) {
+          toast(`Es sind nur noch ${item.onHand} Stück im Vorrat.`, 'error');
+          return;
+        }
+        dlg.close();
+        onGift({ qty: n, name: f.customer.value.trim() });
       });
       dlg.querySelector('[data-draft]').addEventListener('click', () => {
         const n = Math.max(1, Math.round(num(f.qty.value)) || 1);
@@ -147,7 +159,7 @@ export function editStockDialog(app, item, { onDone } = {}) {
         <label class="field"><span>Verkaufspreis pro Stück (€)</span><input name="price" inputmode="decimal" value="${dec(item.price)}"></label>
         <label class="field"><span>Noch da (Stück)</span><input name="onHand" type="number" min="0" step="1" inputmode="numeric" value="${item.onHand}"></label>
       </div>
-      <p class="small muted">Gedruckt ${item.made}, verkauft ${item.sold}${item.made - item.sold - item.onHand > 0 ? `, ${item.made - item.sold - item.onHand} kaputt oder verschenkt` : ''}.
+      <p class="small muted">Gedruckt ${item.made}, verkauft ${item.sold}${item.given ? `, verschenkt ${item.given}` : ''}${item.made - item.sold - (item.given || 0) - item.onHand > 0 ? `, ${item.made - item.sold - (item.given || 0) - item.onHand} kaputt oder weg` : ''}.
         Selbstkosten ${fmtEur(item.parts.cost)} pro Stück, ${fmt(item.grams)} g Filament.</p>`,
     foot: '<button type="button" class="btn danger" data-del>Aus dem Vorrat löschen</button><span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Speichern</button>',
     onReady(dlg) {

@@ -869,6 +869,7 @@ export function normalizeStockItem(input, { now = new Date().toISOString() } = {
     onHand: Math.max(0, toInt(src.onHand, made)), // noch da
     made, // insgesamt gedruckt
     sold: Math.max(0, toInt(src.sold, 0)),
+    given: Math.max(0, toInt(src.given, 0)), // verschenkt (Proben)
     batchQty: Math.max(1, toInt(src.batchQty, made || 1)), // Teile pro Druck, für den Beleg
     price: Math.max(0, toMoney(src.price) ?? 0), // Verkaufspreis pro Stück
     parts: costParts(src.parts), // Selbstkosten pro Stück
@@ -942,7 +943,8 @@ export function stockSaleItem(item, qty = 1, price = item.price) {
 
 // Vorrat beim Verkauf abbuchen (sign -1) oder beim Löschen zurückbuchen (+1).
 // Wirft, wenn nicht genug da ist; dann bleibt alles unverändert.
-export function applyStockSale(stock, sale, sign = -1) {
+// field: mitgezählt als verkauft (sold) oder verschenkt (given).
+export function applyStockSale(stock, sale, sign = -1, field = 'sold') {
   const wanted = new Map();
   for (const i of sale.items) if (i.stockId) wanted.set(i.stockId, (wanted.get(i.stockId) || 0) + i.qty);
   for (const [id, qty] of wanted) {
@@ -955,8 +957,55 @@ export function applyStockSale(stock, sale, sign = -1) {
     const item = stock.find((x) => x.id === id);
     if (!item) continue; // Vorrat inzwischen gelöscht
     item.onHand = Math.max(0, item.onHand + sign * qty);
-    item.sold = Math.max(0, item.sold - sign * qty);
+    item[field] = Math.max(0, (item[field] || 0) - sign * qty);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Verschenkt: Gratis-Proben und Geschenke, wem, was und was es gekostet hat.
+// Kein Beleg (keine Belegnummer, kein Umsatz); das Filament steckt schon in
+// den Filamentkäufen der Jahresübersicht.
+
+export const GIFT_REASONS = ['Probe', 'Geschenk', 'Werbung', 'Sonstiges'];
+
+export function normalizeGift(input, { now = new Date().toISOString() } = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  const items = (Array.isArray(src.items) ? src.items : []).slice(0, 50).map((i) => {
+    const qty = Math.max(1, toInt(i && i.qty, 1));
+    const cost = i && i.breakdown && Number.isFinite(Number(i.breakdown.cost)) ? cents(Number(i.breakdown.cost) * qty) : i && i.cost;
+    return normalizeSaleItem({ ...i, breakdown: null, price: 0, cost });
+  }).filter((i) => i.kind !== 'versand');
+  return {
+    id: str(src.id) || newId(),
+    date: /^\d{4}-\d{2}-\d{2}$/.test(str(src.date)) ? str(src.date) : now.slice(0, 10),
+    customer: String(src.customer ?? '').trim(), // Name (und Adresse)
+    customerId: str(src.customerId),
+    reason: GIFT_REASONS.includes(src.reason) ? src.reason : 'Probe',
+    note: str(src.note),
+    items,
+    title: items.length > 1 ? `${items[0].title} + ${items.length - 1} weitere` : (items[0] ? items[0].title : 'Probe'),
+    qty: items.reduce((a, i) => a + i.qty, 0),
+    cost: cents(items.reduce((a, i) => a + i.cost, 0)), // Selbstkosten
+    createdAt: str(src.createdAt) || now,
+  };
+}
+
+const firstLine = (text) => String(text || '').split('\n')[0].trim().toLowerCase();
+export const sameCustomer = (a, b) => (a.customerId && b.customerId ? a.customerId === b.customerId : Boolean(firstLine(a.customer)) && firstLine(a.customer) === firstLine(b.customer));
+
+// Hat der Beschenkte danach etwas gekauft? Erster Beleg am oder nach dem Tag der Probe.
+export function giftFollowUp(gift, sales) {
+  return sales.filter((s) => s.date >= gift.date && sameCustomer(s, gift))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.nr.localeCompare(b.nr))[0] || null;
+}
+
+// Überblick: wie viele Proben an wie viele Personen, Kosten, daraus Bestellungen
+export function giftSummary(gifts, sales) {
+  const people = new Set(gifts.map((g) => g.customerId || firstLine(g.customer)).filter(Boolean));
+  const won = new Set(gifts.filter((g) => giftFollowUp(g, sales)).map((g) => g.customerId || firstLine(g.customer)));
+  return {
+    count: gifts.length, pieces: gifts.reduce((a, g) => a + g.qty, 0), people: people.size, cost: cents(gifts.reduce((a, g) => a + g.cost, 0)), ordered: won.size,
+  };
 }
 
 // Angebot: aufgebaut wie ein Beleg, dazu gültig bis und ob daraus ein Beleg wurde.

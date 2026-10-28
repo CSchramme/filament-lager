@@ -2,7 +2,7 @@
 // Kundenliste. Positionen kommen aus dem Rechner, dem Druckverlauf (Reiter
 // "Drucke") oder dem Vorrat.
 import {
-  DELIVERY_MODES, customerText, deliveryQuote, offerStatus, orderLabel, orderStepAt, orderSteps, salesSummary, trackingLabel, trackingUrl, validTrackingNumber,
+  DELIVERY_MODES, GIFT_REASONS, customerText, deliveryQuote, giftFollowUp, giftSummary, offerStatus, sameCustomer, stockSaleItem, orderLabel, orderStepAt, orderSteps, salesSummary, trackingLabel, trackingUrl, validTrackingNumber,
 } from './domain.js';
 import { openReceipt } from './documents.js';
 import { qrSvg } from './qr.js';
@@ -21,6 +21,7 @@ let offers = [];
 let stock = [];
 let customers = [];
 let customerQuery = '';
+let gifts = []; // verschenkt: Proben und Geschenke
 let dhl = { hasKey: false }; // DHL-API-Schlüssel auf dem Server vorhanden?
 
 const today = () => localDay();
@@ -32,6 +33,7 @@ export async function renderVerkauf(root, app, { go }) {
     <section class="panel" id="stock"></section>
     <section class="panel" id="offers" hidden></section>
     <section class="panel" id="sales"><div class="panel-head"><h2>Belege</h2></div><p class="small muted">Lädt …</p></section>
+    <section class="panel" id="gifts"></section>
     <section class="panel" id="customers"><div class="panel-head"><h2>Kunden</h2></div><p class="small muted">Lädt …</p></section>`;
   root.querySelector('#draft').addEventListener('click', onDraftClick);
   root.querySelector('#draft').addEventListener('input', onDraftInput);
@@ -39,15 +41,19 @@ export async function renderVerkauf(root, app, { go }) {
   root.querySelector('#stock').addEventListener('click', onStockClick);
   root.querySelector('#offers').addEventListener('click', onOffersClick);
   root.querySelector('#sales').addEventListener('click', onSalesClick);
+  root.querySelector('#gifts').addEventListener('click', onGiftsClick);
   root.querySelector('#customers').addEventListener('click', onCustomersClick);
   root.querySelector('#customers').addEventListener('input', onCustomersInput);
   try {
-    const [s, o, st, c, d] = await Promise.all([app.backend.sales(), app.backend.offers(), app.backend.stock(), app.backend.customers(), app.backend.dhlSettings()]);
+    const [s, o, st, c, d, g] = await Promise.all([
+      app.backend.sales(), app.backend.offers(), app.backend.stock(), app.backend.customers(), app.backend.dhlSettings(), app.backend.gifts(),
+    ]);
     sales = s;
     offers = o.offers;
     stock = st.stock;
     customers = c.customers;
     dhl = d;
+    gifts = g.gifts;
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -55,6 +61,7 @@ export async function renderVerkauf(root, app, { go }) {
   updateStock();
   updateOffers();
   updateSales();
+  updateGifts();
   updateCustomers();
 }
 
@@ -63,6 +70,7 @@ function takeSales(res) {
   sales = { sales: res.sales, summary: res.summary };
   if (res.stock) stock = res.stock;
   updateStock();
+  updateGifts(); // "hat danach bestellt" hängt an den Belegen
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +130,7 @@ function draftHtml() {
     <div class="actions">
       <button class="btn primary" type="button" data-draft="create">Beleg erstellen</button>
       <button class="btn" type="button" data-draft="offer">Als Angebot speichern</button>
+      <button class="btn" type="button" data-draft="gift">${icons.gift}Verschenken</button>
       <button class="btn" type="button" data-draft="shipping">${icons.truck}${draft.delivery ? esc(DELIVERY_MODES[draft.delivery]) : 'Versand, Lieferung, Abholung'}</button>
       <button class="btn" type="button" data-draft="manual">Position von Hand</button>
       <span class="spacer"></span>
@@ -240,6 +249,12 @@ async function onDraftClick(e) {
   }
   if (action === 'create') await createReceipt(b);
   if (action === 'offer') await createOffer(b);
+  if (action === 'gift') {
+    const draft = loadDraft();
+    const body = saleFromDraft(draft, ctx.app.settings, { date: today(), customer: '', note: '' });
+    const c = draft.customerId && customers.find((x) => x.id === draft.customerId);
+    giftDialog({ items: body.items, name: c ? c.name : (draft.customer || '').split('\n')[0], fromDraft: true });
+  }
 }
 
 function manualDialog() {
@@ -476,6 +491,9 @@ function onStockClick(e) {
       onDraft() {
         updateDraft();
         updateStock();
+      },
+      onGift({ qty, name }) {
+        giftDialog({ items: [stockSaleItem(item, qty, 0)], name });
       },
     });
   }
@@ -800,6 +818,154 @@ function orderDialog(sale) {
 }
 
 // ---------------------------------------------------------------------------
+// Verschenkt: Proben und Geschenke
+
+const giftsOf = (c) => gifts.filter((g) => sameCustomer(g, { customerId: c.id, customer: c.name }));
+const giftLine = (g) => `${dateDe(g.date)} ${g.items.map((i) => `${i.qty > 1 ? `${i.qty} × ` : ''}${i.title}`).join(', ')} (${g.reason})`;
+
+function updateGifts() {
+  const el = ctx.root.querySelector('#gifts');
+  if (!el) return;
+  const sum = giftSummary(gifts, sales.sales);
+  el.innerHTML = `<div class="panel-head"><h2>Verschenkt</h2><p>Proben und Geschenke: wem, was, und ob daraus eine Bestellung wurde</p></div>
+    ${gifts.length ? `<div class="stats sales-stats">
+        ${tile('Verschenkt', plural(sum.pieces, 'Teil', 'Teile'), `an ${plural(sum.people, 'Person', 'Personen')}`)}
+        ${tile('Selbstkosten', fmtEur(sum.cost), 'Filament, Strom, Arbeit')}
+        ${tile('Danach bestellt', `${sum.ordered} von ${sum.people}`, sum.people ? `${Math.round((sum.ordered / sum.people) * 100)} % haben gekauft` : '')}
+      </div>
+      <div class="sale-list">${gifts.slice(0, 60).map((g) => {
+    const next = giftFollowUp(g, sales.sales);
+    return `<div class="sale-row gift-row" data-id="${esc(g.id)}">
+          <span class="num small muted sale-nr"><span>${dateDe(g.date)}</span><span>${esc(g.reason)}</span></span>
+          <div class="sale-main">
+            <button type="button" class="sale-title" data-gift="edit"><strong>${esc(g.customer.split('\n')[0])}</strong><span class="small muted"> · ${esc(g.title)}${g.qty > 1 ? ` × ${g.qty}` : ''}</span></button>
+            ${next ? `<button type="button" class="pill order zugestellt" data-gift="open" data-sale="${esc(next.id)}">hat bestellt: ${esc(next.nr)}, ${fmtEur(next.price)}</button>` : '<span class="small muted">noch keine Bestellung</span>'}
+          </div>
+          <span class="num small muted" title="Selbstkosten">${fmtEur(g.cost)}</span>
+          <button type="button" class="icon-btn" data-gift="delete" aria-label="Eintrag löschen">×</button>
+        </div>`;
+  }).join('')}</div>`
+    : `<p class="small muted">Noch nichts verschenkt. Eine Gratis-Probe trägst du im offenen Beleg mit „Verschenken“ ein oder im Vorrat bei einem Teil.
+        Das gibt keinen Beleg und keinen Umsatz; der Vorrat zählt mit, und hier steht später, ob jemand danach bestellt hat.</p>`}`;
+}
+
+// Wem? Neue Namen kommen in die Kundenliste.
+async function customerByName(name) {
+  let c = customers.find((x) => x.name.toLowerCase() === name.toLowerCase());
+  if (!c) {
+    const res = await ctx.app.backend.addCustomer({ name });
+    customers = res.customers;
+    c = res.item;
+  }
+  return c;
+}
+
+function giftDialog({ items, name = '', fromDraft = false }) {
+  const what = items.filter((i) => i.kind !== 'versand');
+  const cost = what.reduce((a, i) => a + (i.breakdown ? i.breakdown.cost * i.qty : i.cost || 0), 0);
+  if (!what.length) {
+    toast('Im offenen Beleg ist nichts zum Verschenken.', 'error');
+    return;
+  }
+  openDialog({
+    title: 'Verschenken',
+    body: `<p><strong>${esc(what.map((i) => `${i.qty} × ${i.title}`).join(', '))}</strong> <span class="small muted">· Selbstkosten ${fmtEur(cost)}</span></p>
+      <div class="fields">
+        <label class="field full"><span>Wem?</span><input name="name" value="${esc(name)}" placeholder="Name suchen oder neu" autocomplete="off" required></label>
+        <label class="field"><span>Was ist es?</span><select name="reason">${GIFT_REASONS.map((r) => `<option>${esc(r)}</option>`).join('')}</select></label>
+        <label class="field"><span>Datum</span><input type="date" name="date" value="${esc(today())}"></label>
+        <label class="field full"><span>Notiz (optional)</span><input name="note" placeholder="z. B. zum Testen der Farbe, auf dem Weihnachtsmarkt"></label>
+      </div>
+      <div class="note small" data-before hidden></div>
+      <p class="small muted">Gibt keinen Beleg und keinen Umsatz. Teile aus dem Vorrat werden abgezogen. Unter „Verschenkt“ steht später, ob daraus eine Bestellung wurde.</p>`,
+    foot: '<span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Verschenkt</button>',
+    onReady(dlg, form) {
+      const f = form.elements;
+      // Hat die Person schon etwas bekommen?
+      const before = () => {
+        const n = f.name.value.trim();
+        const c = customers.find((x) => x.name.toLowerCase() === n.toLowerCase());
+        const old = n ? gifts.filter((g) => sameCustomer(g, { customerId: c ? c.id : '', customer: n })) : [];
+        const box = dlg.querySelector('[data-before]');
+        box.hidden = !old.length;
+        box.innerHTML = old.length ? `<strong>${esc(n)} hat schon bekommen:</strong> ${old.slice(0, 5).map((g) => esc(giftLine(g))).join('; ')}` : '';
+      };
+      combobox(f.name, {
+        options: () => customers.map((c) => ({ value: c.name, hint: `${giftsOf(c).length ? `${plural(giftsOf(c).length, 'Probe', 'Proben')} · ` : ''}${c.address.split('\n').pop()}` })),
+        onPick: before,
+        newLabel: (v) => `„${v}“ als neuen Kunden`,
+      });
+      f.name.addEventListener('input', before);
+      before();
+    },
+    async onSubmit(form) {
+      const f = form.elements;
+      const n = f.name.value.trim();
+      if (!n) throw new Error('Bitte eintragen, wem du es geschenkt hast.');
+      const c = await customerByName(n);
+      const res = await ctx.app.backend.addGift({
+        date: f.date.value || today(), customer: customerText(c), customerId: c.id, reason: f.reason.value, note: f.note.value.trim(), items: what,
+      });
+      gifts = res.gifts;
+      stock = res.stock;
+      if (fromDraft) {
+        saveDraft({ positions: [], customer: '', note: '' });
+        updateDraft();
+      }
+      updateStock();
+      updateGifts();
+      updateCustomers();
+      toast(`Verschenkt an ${c.name}: ${res.item.title}`);
+    },
+  });
+}
+
+function onGiftsClick(e) {
+  const b = e.target.closest('[data-gift]');
+  if (!b) return;
+  const g = gifts.find((x) => x.id === b.closest('.gift-row').dataset.id);
+  if (!g) return;
+  if (b.dataset.gift === 'open') {
+    const sale = sales.sales.find((s) => s.id === b.dataset.sale);
+    if (sale) openReceipt(sale, ctx.app.settings);
+  }
+  if (b.dataset.gift === 'edit') {
+    openDialog({
+      title: `Verschenkt an ${esc(g.customer.split('\n')[0])}`,
+      body: `<p>${esc(g.items.map((i) => `${i.qty} × ${i.title}`).join(', '))} <span class="small muted">· Selbstkosten ${fmtEur(g.cost)}</span></p>
+        <div class="fields">
+          <label class="field"><span>Was ist es?</span><select name="reason">${GIFT_REASONS.map((r) => `<option ${r === g.reason ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></label>
+          <label class="field"><span>Datum</span><input type="date" name="date" value="${esc(g.date)}"></label>
+          <label class="field full"><span>Notiz</span><input name="note" value="${esc(g.note)}"></label>
+        </div>`,
+      foot: '<span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Speichern</button>',
+      async onSubmit(form) {
+        const f = form.elements;
+        gifts = (await ctx.app.backend.updateGift(g.id, { reason: f.reason.value, date: f.date.value, note: f.note.value.trim() })).gifts;
+        updateGifts();
+        toast('Gespeichert');
+      },
+    });
+  }
+  if (b.dataset.gift === 'delete') {
+    openDialog({
+      title: 'Eintrag löschen?',
+      body: `<p>${esc(giftLine(g))} an ${esc(g.customer.split('\n')[0])} wird gelöscht.${g.items.some((i) => i.stockId) ? ' Die Teile kommen zurück in den Vorrat.' : ''}</p>`,
+      foot: '<button type="button" class="btn" data-close>Abbrechen</button><span class="spacer"></span><button type="submit" class="btn danger solid">Löschen</button>',
+      async onSubmit() {
+        const res = await ctx.app.backend.deleteGift(g.id);
+        gifts = res.gifts;
+        stock = res.stock;
+        updateGifts();
+        updateStock();
+        updateCustomers();
+        toast('Eintrag gelöscht');
+      },
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Kunden
 
 // Belege eines Kunden: über die Kundennummer, ältere Belege über den Namen
@@ -826,7 +992,7 @@ function updateCustomers() {
     return `<div class="customer-row" data-id="${esc(c.id)}">
         <button type="button" class="sale-title customer-name" data-customer="edit"><strong>${esc(c.name)}</strong>
           <span class="small muted">${esc([c.address.replace(/\n/g, ', '), c.email, c.phone].filter(Boolean).join(' · ') || 'keine Kontaktdaten')}</span></button>
-        <span class="small muted num">${own.length ? `${plural(own.length, 'Beleg', 'Belege')} · ${fmtEur(total)}` : 'noch kein Beleg'}</span>
+        <span class="small muted num">${own.length ? `${plural(own.length, 'Beleg', 'Belege')} · ${fmtEur(total)}` : 'noch kein Beleg'}${giftsOf(c).length ? ` · ${plural(giftsOf(c).length, 'Probe', 'Proben')}` : ''}</span>
         <button type="button" class="btn small" data-customer="receipt">Neuer Beleg</button>
       </div>`;
   }).join('')}</div>` : `<p class="small muted">${customers.length ? 'Kein Kunde passt zur Suche.' : 'Noch keine Kunden. Wer im offenen Beleg als Kunde eingetragen wird, landet beim Erstellen automatisch hier.'}</p>`}`;
@@ -878,7 +1044,8 @@ function customerDialog(c) {
       ${own.length ? `<h3>Belege</h3><div class="sale-list">${own.slice(0, 20).map((s) => `<div class="sale-row">
           <span class="num small muted sale-nr"><span>${esc(s.nr)}</span><span>${dateDe(s.date)}</span></span>
           <button type="button" class="sale-title" data-open="${esc(s.id)}"><strong>${esc(s.title)}</strong></button>
-          <span class="num">${fmtEur(s.price)}</span><span></span><span></span></div>`).join('')}</div>` : ''}`,
+          <span class="num">${fmtEur(s.price)}</span><span></span><span></span></div>`).join('')}</div>` : ''}
+      ${c && giftsOf(c).length ? `<h3>Verschenkt</h3><ul class="small">${giftsOf(c).map((g) => `<li>${esc(giftLine(g))}, Selbstkosten ${fmtEur(g.cost)}</li>`).join('')}</ul>` : ''}`,
     foot: `${c ? '<button type="button" class="btn danger" data-del>Löschen</button>' : ''}<span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="submit" class="btn primary">Speichern</button>`,
     onReady(dlg) {
       dlg.querySelector('.dlg-body').addEventListener('click', (e) => {

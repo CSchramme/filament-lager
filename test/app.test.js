@@ -856,3 +856,24 @@ test('Entfernung zum Kunden über OpenStreetMap, mit Zwischenspeicher', async ()
   assert.match((await post({ to: '' })).body.error, /Adresse des Kunden/);
   srv.close();
 });
+
+test('Verschenkt: anlegen zieht vom Vorrat ab, löschen bringt zurück, kein Beleg', async () => {
+  const { body: made } = await call('POST', '/api/vorrat', { title: 'Probe-Herz', made: 5, price: 2, parts: { filament: 0.1, labor: 0.05 } });
+  const item = made.item;
+  const salesBefore = (await call('GET', '/api/verkaeufe')).body.sales.length;
+  assert.equal((await call('POST', '/api/geschenke', { items: [{ title: 'Herz', qty: 1, cost: 0.2 }] })).status, 400); // wem?
+  const g = await call('POST', '/api/geschenke', {
+    customer: 'Oma Erna', reason: 'Geschenk', items: [{ title: item.title, qty: 2, stockId: item.id, breakdown: { cost: item.parts.cost } }],
+  });
+  assert.equal(g.status, 201);
+  assert.deepEqual([g.body.item.reason, g.body.item.qty, g.body.item.cost], ['Geschenk', 2, 0.3]);
+  const st = g.body.stock.find((x) => x.id === item.id);
+  assert.deepEqual([st.onHand, st.given, st.sold], [3, 2, 0]);
+  assert.equal((await call('GET', '/api/verkaeufe')).body.sales.length, salesBefore); // kein Beleg
+  assert.equal((await call('POST', '/api/geschenke', { customer: 'X', items: [{ title: item.title, qty: 9, stockId: item.id }] })).status, 409);
+  const upd = await call('PUT', `/api/geschenke/${g.body.item.id}`, { note: 'zum Geburtstag', items: [] });
+  assert.deepEqual([upd.body.item.note, upd.body.item.qty], ['zum Geburtstag', 2]); // Teile bleiben
+  const del = await call('DELETE', `/api/geschenke/${g.body.item.id}`);
+  assert.equal(del.body.gifts.length, 0);
+  assert.equal(del.body.stock.find((x) => x.id === item.id).onHand, 5);
+});

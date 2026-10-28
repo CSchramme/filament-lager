@@ -501,3 +501,30 @@ test('Fahrtkosten und Bambu-Farben', async () => {
   assert.deepEqual(bambuColors('Unbekannt XY'), []);
   assert.ok(filamentTypes([], settings).some((t) => t.material === 'PLA Silk')); // ganzes Sortiment zur Auswahl
 });
+
+test('Verschenkt: Selbstkosten, Vorrat, wer danach bestellt hat', async () => {
+  const {
+    giftFollowUp, giftSummary, normalizeGift,
+  } = await import('../public/js/domain.js');
+  const kuerbis = normalizeStockItem({ title: 'Kürbis', made: 25, price: 1.5, parts: { filament: 0.24, labor: 0.05 } });
+  const g = normalizeGift({
+    date: '2026-10-10', customer: 'Lisa Müller\nGartenweg 5', customerId: 'c1', reason: 'Probe',
+    items: [stockSaleItem(kuerbis, 2, 0), { title: 'Versand', kind: 'versand', qty: 1, cost: 4.19 }],
+  });
+  assert.deepEqual([g.title, g.qty, g.cost, g.items[0].price, g.items.length], ['Kürbis', 2, 0.58, 0, 1]); // ohne Versand
+  applyStockSale([kuerbis], g, -1, 'given');
+  assert.deepEqual([kuerbis.onHand, kuerbis.sold, kuerbis.given], [23, 0, 2]);
+  assert.throws(() => applyStockSale([kuerbis], normalizeGift({ customer: 'X', items: [stockSaleItem(kuerbis, 30, 0)] }), -1, 'given'), /nur noch 23/);
+
+  const sales = [
+    normalizeSale({ nr: '2026-003', date: '2026-10-01', customerId: 'c1', customer: 'Lisa Müller', items: [{ title: 'A', qty: 1, price: 5 }] }), // vorher
+    normalizeSale({ nr: '2026-007', date: '2026-10-20', customerId: 'c1', customer: 'Lisa Müller', items: [{ title: 'Kürbis', qty: 6, price: 9 }] }),
+    normalizeSale({ nr: '2026-008', date: '2026-10-21', customer: 'Tom', items: [{ title: 'B', qty: 1, price: 3 }] }),
+  ];
+  assert.equal(giftFollowUp(g, sales).nr, '2026-007');
+  const tom = normalizeGift({ date: '2026-10-22', customer: 'Tom', items: [{ title: 'Clip', qty: 1, cost: 0.3 }] });
+  assert.equal(giftFollowUp(tom, sales), null); // Tom hat vor der Probe gekauft
+  assert.deepEqual(giftSummary([g, tom], sales), {
+    count: 2, pieces: 3, people: 2, cost: 0.88, ordered: 1,
+  });
+});

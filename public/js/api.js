@@ -3,7 +3,7 @@
 // das Lager im Browser; die Bambu-Anbindung ist dann nicht verfügbar.
 import {
   advanceOrder, applyPriceChanges, applyStockSale, archiveSpool, assignNumbers, mergeStock, migratePriceList, newId, nextOfferNr, nextReceiptNr, normalizeCustomer,
-  normalizeArchivedSpool, normalizeExpense, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
+  normalizeArchivedSpool, normalizeExpense, normalizeGift, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
   normalizeDelivery, normalizeOrder, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary, setOrderStatus, spoolsFromDelivery,
 } from './domain.js';
 import { seedSpools } from './seed.js';
@@ -56,6 +56,10 @@ class ServerBackend {
   setTracking(id, number) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id) + '/sendung', { number }); }
   checkTracking(id) { return this.req('POST', 'api/verkaeufe/' + encodeURIComponent(id) + '/sendung/pruefen', {}); }
   dhlSettings() { return this.req('GET', 'api/dhl'); }
+  gifts() { return this.req('GET', 'api/geschenke'); }
+  addGift(g) { return this.req('POST', 'api/geschenke', g); }
+  updateGift(id, g) { return this.req('PUT', 'api/geschenke/' + encodeURIComponent(id), g); }
+  deleteGift(id) { return this.req('DELETE', 'api/geschenke/' + encodeURIComponent(id)); }
   deliveries() { return this.req('GET', 'api/lieferungen'); }
   distance(to) { return this.req('POST', 'api/entfernung', { to }); }
   addDelivery(d) { return this.req('POST', 'api/lieferungen', d); }
@@ -172,6 +176,7 @@ class LocalBackend {
         expenses: (Array.isArray(raw.expenses) ? raw.expenses : []).map((x) => normalizeExpense(x)),
         spoolArchive: (Array.isArray(raw.spoolArchive) ? raw.spoolArchive : []).map((x) => normalizeArchivedSpool(x)),
         deliveries: (Array.isArray(raw.deliveries) ? raw.deliveries : []).map((x) => normalizeDelivery(x)),
+        gifts: (Array.isArray(raw.gifts) ? raw.gifts : []).map((x) => normalizeGift(x)),
       };
       // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
       for (const sale of [...data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(data, sale.date);
@@ -181,7 +186,7 @@ class LocalBackend {
     }
     const data = {
       settings: normalizeSettings(), spools: seedSpools(), nextNr: 1, sales: [], receiptSeq: {}, powerPayments: [], offers: [], offerSeq: {}, stock: [],
-      customers: [], expenses: [], spoolArchive: [], deliveries: [],
+      customers: [], expenses: [], spoolArchive: [], deliveries: [], gifts: [],
     };
     this.write(data);
     return data;
@@ -365,6 +370,44 @@ class LocalBackend {
 
   async distance() {
     throw new Error('Die Entfernung berechnet nur der Lager-Server. Bitte die km von Hand eintragen.');
+  }
+
+  // Verschenkt
+  async gifts() {
+    const data = this.load();
+    return { gifts: data.gifts, stock: data.stock };
+  }
+
+  async addGift(input) {
+    const data = this.load();
+    const gift = normalizeGift({ ...input, id: undefined, createdAt: undefined });
+    if (!gift.customer) throw new Error('Bitte eintragen, wem du es geschenkt hast.');
+    if (!gift.items.length) throw new Error('Es fehlt, was verschenkt wurde.');
+    applyStockSale(data.stock, gift, -1, 'given');
+    data.gifts.unshift(gift);
+    this.write(data);
+    return { item: gift, gifts: data.gifts, stock: data.stock };
+  }
+
+  async updateGift(id, b) {
+    const data = this.load();
+    const old = data.gifts.find((x) => x.id === id);
+    if (!old) throw new Error('Eintrag nicht gefunden.');
+    const item = normalizeGift({
+      ...old, date: b.date ?? old.date, customer: b.customer ?? old.customer, customerId: b.customerId ?? old.customerId, reason: b.reason ?? old.reason, note: b.note ?? old.note,
+    });
+    data.gifts = data.gifts.map((x) => (x.id === id ? item : x));
+    this.write(data);
+    return { item, gifts: data.gifts, stock: data.stock };
+  }
+
+  async deleteGift(id) {
+    const data = this.load();
+    const gift = data.gifts.find((x) => x.id === id);
+    if (gift) applyStockSale(data.stock, gift, +1, 'given');
+    data.gifts = data.gifts.filter((x) => x.id !== id);
+    this.write(data);
+    return { gifts: data.gifts, stock: data.stock };
   }
 
   // Lieferungen ohne Server: nur Nummer und Link zu dhl.de

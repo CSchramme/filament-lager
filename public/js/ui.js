@@ -20,6 +20,7 @@ export const icons = {
   edit: svg('<path d="M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4"/>'),
   qr: svg('<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2"/>'),
   truck: svg('<path d="M3 6h11v10H3zM14 9h4l3 3v4h-7"/><circle cx="7" cy="17.5" r="1.5"/><circle cx="17" cy="17.5" r="1.5"/>'),
+  gift: svg('<path d="M4 11h16v9H4zM3 7h18v4H3zM12 7v13"/><path d="M12 7C10.5 4 7 3.5 7 5.5S10 7 12 7zm0 0c1.5-3 5-3.5 5-1.5S14 7 12 7z"/>'),
   cart: svg('<path d="M3 4h2l2.4 11h10.2L20 7H6.2"/><circle cx="9" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/>'),
 };
 

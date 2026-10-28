@@ -26,6 +26,8 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
 - **Verkauf**: Belege mit der Aufteilung des Preises pro Teil, Angebote, die mit einem Klick zum
   Beleg werden, Kundenliste, Versand als feste Position und **DHL-Sendungsverfolgung** mit der
   Sendungsnummer.
+- **Verschenkt**: wem du Gratis-Proben oder Geschenke gegeben hast, was es war, was es gekostet
+  hat und ob die Person danach bestellt hat.
 - **Bestellverfolgung für Kunden** wie bei Versandhändlern: Bestellung eingegangen, in
   Bearbeitung, wird gedruckt (mit Fortschritt live vom Drucker), verpackt, versendet (mit DHL),
   zugestellt, über einen Link ohne Passwort.
@@ -344,6 +346,21 @@ Unter **Verkauf**:
   Kundenliste; beim nächsten Mal reicht es, den Namen anzutippen. Adresse, E-Mail und Telefon
   lassen sich ergänzen, die Liste zeigt die Belege jedes Kunden. „Neuer Beleg“ setzt den Kunden in
   den offenen Beleg.
+
+### Verschenkt: Proben und Geschenke
+
+Für Gratis-Proben, Geschenke und Werbung: im **offenen Beleg** auf „Verschenken“ oder im **Vorrat**
+bei einem Teil auf „Verkaufen“ → „Verschenken“. Dann eintragen, **wem** (aus der Kundenliste oder
+neu), was es ist (Probe, Geschenk, Werbung, Sonstiges), Datum und eine Notiz. Hat die Person schon
+etwas bekommen, steht das im Dialog.
+
+Das gibt **keinen Beleg und keinen Umsatz**; Teile aus dem Vorrat werden abgezogen (der Vorrat zählt
+sie als „verschenkt“). Unter **Verkauf → Verschenkt** stehen alle Einträge mit Selbstkosten und
+dem Hinweis, ob die Person **danach bestellt** hat (mit Belegnummer), oben die Summe: wie viele
+Teile an wie viele Personen, die Selbstkosten und wie viele danach gekauft haben. In der
+Kundenliste steht bei jedem Kunden, wie viele Proben er bekommen hat. Löschen bringt die Teile
+zurück in den Vorrat. Die Selbstkosten zählen nicht extra in der Jahresübersicht, weil das
+Filament dort schon mit dem Kauf der Rollen drin ist.
 
 ### DHL-Sendungsverfolgung
 

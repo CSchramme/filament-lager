@@ -6,7 +6,7 @@ import express from 'express';
 import {
   applyPriceChanges, applyStockSale, archiveSpool, colorNameFor, openPower, mergeStock, newId, normalizeCustomer, normalizeExpense, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
   normalizeSettings, normalizeSpool, normalizeStockItem, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
-  validTrackingNumber, ORDER_STEPS, advanceOrder, newToken, normalizeDelivery, normalizeOrder, setOrderStatus, spoolsFromDelivery, trackingUrl,
+  validTrackingNumber, ORDER_STEPS, advanceOrder, newToken, normalizeDelivery, normalizeGift, normalizeOrder, setOrderStatus, spoolsFromDelivery, trackingUrl,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import {
@@ -550,6 +550,42 @@ export function createApp({
     d.spoolIds = created.map((s) => s.id);
     await store.save(); // vergibt die Rollennummern
     res.json({ item: d, created, spools: store.spools, ...deliveriesView() });
+  });
+
+  // Verschenkt (Proben, Geschenke): kein Beleg, aber der Vorrat zählt mit
+  const giftsView = () => ({ gifts: store.data.gifts, stock: store.data.stock });
+  app.get('/api/geschenke', (req, res) => res.json(giftsView()));
+  app.post('/api/geschenke', async (req, res) => {
+    const gift = normalizeGift({ ...(req.body || {}), id: undefined, createdAt: undefined });
+    if (!gift.customer) throw new HttpError(400, 'Bitte eintragen, wem du es geschenkt hast.');
+    if (!gift.items.length) throw new HttpError(400, 'Es fehlt, was verschenkt wurde.');
+    try {
+      applyStockSale(store.data.stock, gift, -1, 'given');
+    } catch (err) {
+      throw new HttpError(409, err.message);
+    }
+    store.data.gifts.unshift(gift);
+    await store.save();
+    res.status(201).json({ item: gift, ...giftsView() });
+  });
+  app.put('/api/geschenke/:id', async (req, res) => {
+    const idx = store.data.gifts.findIndex((x) => x.id === req.params.id);
+    if (idx < 0) throw new HttpError(404, 'Eintrag nicht gefunden.');
+    const old = store.data.gifts[idx];
+    const b = req.body || {};
+    // Was verschenkt wurde, bleibt; ändern lassen sich Person, Datum, Art und Notiz
+    store.data.gifts[idx] = normalizeGift({
+      ...old, date: b.date ?? old.date, customer: b.customer ?? old.customer, customerId: b.customerId ?? old.customerId, reason: b.reason ?? old.reason, note: b.note ?? old.note,
+    });
+    await store.save();
+    res.json({ item: store.data.gifts[idx], ...giftsView() });
+  });
+  app.delete('/api/geschenke/:id', async (req, res) => {
+    const gift = store.data.gifts.find((x) => x.id === req.params.id);
+    if (gift) applyStockSale(store.data.stock, gift, +1, 'given'); // Teile zurück in den Vorrat
+    store.data.gifts = store.data.gifts.filter((x) => x.id !== req.params.id);
+    await store.save();
+    res.json(giftsView());
   });
 
   // Entfernung von deiner Adresse zum Kunden (Lieferung ohne Post)
