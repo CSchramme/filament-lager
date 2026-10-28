@@ -28,7 +28,7 @@ function emptyBambu() {
 }
 
 // Bereiche, die beim Zurückholen einer Sicherung nicht ersetzt werden
-export const SECRET_KEYS = ['bambu', 'notify', 'dhl', 'apiKey', 'share'];
+export const SECRET_KEYS = ['bambu', 'notify', 'dhl', 'apiKey', 'share', 'colorShare'];
 
 // Baut den Datenstand aus einer gelesenen Datei oder Sicherung.
 export function dataFromRaw(raw) {
@@ -66,6 +66,7 @@ export function dataFromRaw(raw) {
   data.deliveries = (Array.isArray(raw.deliveries) ? raw.deliveries : []).map((x) => normalizeDelivery(x));
   data.geo = normalizeGeo(raw.geo);
   data.gifts = (Array.isArray(raw.gifts) ? raw.gifts : []).map((x) => normalizeGift(x));
+  data.colorShare = { token: String((raw.colorShare && raw.colorShare.token) || ''), createdAt: String((raw.colorShare && raw.colorShare.createdAt) || '') };
   assignNumbers(data);
   data.settings.places = placeList(data.settings, data.spools);
   const migrated = migratePriceList(raw.settings, data);
@@ -94,7 +95,7 @@ export class Store {
     } else {
       this.data = {
         version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '', tasks: [], sales: [], receiptSeq: {}, powerPayments: [],
-        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [], customers: [], expenses: [], dhl: normalizeDhl(), spoolArchive: [], share: { token: '', createdAt: '' }, autoBook: normalizeAutoBook(), deliveries: [], geo: normalizeGeo(), gifts: [],
+        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [], customers: [], expenses: [], dhl: normalizeDhl(), spoolArchive: [], share: { token: '', createdAt: '' }, autoBook: normalizeAutoBook(), deliveries: [], geo: normalizeGeo(), gifts: [], colorShare: { token: '', createdAt: '' },
       };
       await this.save();
     }

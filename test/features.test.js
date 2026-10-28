@@ -557,3 +557,22 @@ test('Kleinunternehmer: Warnung bei 20.000, 25.000, 80.000 und 100.000 € Umsat
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(sent.length, 2);
 });
+
+test('Farbkarte: Farben je Material, wenig unter 300 g, unter 50 g weg, bald da', async () => {
+  const { colorChart, normalizeDelivery } = await import('../public/js/domain.js');
+  const list = [
+    spool({ colorName: 'Schwarz', colorHex: '#000000', netWeight: 200 }),
+    spool({ colorName: 'Schwarz', colorHex: '#000000', netWeight: 400 }), // zusammen 600 g
+    spool({ colorName: 'Weiß', colorHex: '#FFFFFF', netWeight: 120 }),
+    spool({ colorName: 'Rot', colorHex: '#C12E1F', netWeight: 30 }), // zu wenig
+    spool({ material: 'PETG HF', colorName: 'Blau', colorHex: '#0A2989', netWeight: 900 }),
+    spool({ material: 'Support for PLA', colorName: 'Weiß', netWeight: 500 }),
+  ];
+  const coming = normalizeDelivery({ expectedAt: '2026-11-02', items: [{ material: 'PLA Basic', colorName: 'Rot', colorHex: '#C12E1F' }, { material: 'PLA Basic', colorName: 'Schwarz' }] });
+  const c = colorChart(list, [coming]);
+  assert.deepEqual(c.materials.map((m) => [m.material, m.colors.map((x) => `${x.name}:${x.level}`)]), [
+    ['PLA Basic', ['Schwarz:da', 'Weiß:wenig']],
+    ['PETG HF', ['Blau:da']],
+  ]);
+  assert.deepEqual(c.coming.map((x) => [x.name, x.expectedAt]), [['Rot', '2026-11-02']]); // Schwarz ist genug da
+});

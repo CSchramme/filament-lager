@@ -83,6 +83,9 @@ class ServerBackend {
   deleteExpense(id) { return this.req('DELETE', 'api/ausgaben/' + encodeURIComponent(id)); }
   spoolArchive() { return this.req('GET', 'api/rollen-archiv'); }
   share() { return this.req('GET', 'api/teilen'); }
+  colorShare() { return this.req('GET', 'api/farbkarte/link'); }
+  newColorShare() { return this.req('POST', 'api/farbkarte/link', {}); }
+  stopColorShare() { return this.req('DELETE', 'api/farbkarte/link'); }
   backups() { return this.req('GET', 'api/sicherungen'); }
   createBackup() { return this.req('POST', 'api/sicherungen', {}); }
   restoreBackup(body) { return this.req('POST', 'api/sicherungen/zurueckholen', body); }

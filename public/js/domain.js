@@ -684,6 +684,49 @@ export function normalizeDelivery(input, { now = new Date().toISOString() } = {}
   };
 }
 
+// Farbkarte für Kunden: welche Farben je Material da sind, ohne Gramm,
+// Preise oder Lagerorte. Unter 50 g zählt eine Farbe nicht mehr, unter 300 g
+// heißt es "nur noch wenig". Stützmaterial bleibt weg. coming: Farben aus
+// bestellten Paketen, die gerade nicht (genug) da sind.
+export function colorChart(spools, deliveries = []) {
+  const hidden = (m) => /support|pva/i.test(m);
+  const key = (material, name) => `${material.toLowerCase()}|${name.toLowerCase()}`;
+  const byKey = new Map();
+  for (const s of spools) {
+    if (hidden(s.material)) continue;
+    const name = s.colorName || colorNameFor(s.colorHex) || 'Farbe';
+    const k = key(s.material, name);
+    const c = byKey.get(k) || {
+      material: s.material, name, hex: s.colorHex, grams: 0,
+    };
+    c.grams += s.netWeight;
+    byKey.set(k, c);
+  }
+  const available = [...byKey.values()].filter((c) => c.grams >= 50);
+  const materials = new Map();
+  for (const c of available) {
+    if (!materials.has(c.material)) materials.set(c.material, []);
+    materials.get(c.material).push({ name: c.name, hex: c.hex, level: c.grams >= 300 ? 'da' : 'wenig' });
+  }
+  const plenty = new Set(available.filter((c) => c.grams >= 300).map((c) => key(c.material, c.name)));
+  const coming = [];
+  for (const d of deliveries) {
+    if (d.receivedAt) continue;
+    for (const i of d.items) {
+      const k = key(i.material, i.colorName || 'Farbe');
+      if (plenty.has(k) || hidden(i.material) || coming.some((x) => key(x.material, x.name) === k)) continue;
+      coming.push({
+        material: i.material, name: i.colorName || 'Farbe', hex: i.colorHex, expectedAt: d.expectedAt,
+      });
+    }
+  }
+  return {
+    materials: [...materials.entries()].map(([material, colors]) => ({ material, colors: colors.sort((a, b) => a.name.localeCompare(b.name, 'de')) }))
+      .sort((a, b) => b.colors.length - a.colors.length || a.material.localeCompare(b.material, 'de')),
+    coming,
+  };
+}
+
 // Rollen aus der Einkaufsliste als Positionen einer Lieferung
 export function deliveryItemsFromShopping(list) {
   return list.buy.map((i) => normalizeDeliveryItem({

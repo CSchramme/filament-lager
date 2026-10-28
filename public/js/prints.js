@@ -6,7 +6,7 @@ import {
 } from './domain.js';
 import { openJob } from './calculator.js';
 import { openPowerStatement } from './documents.js';
-import { qrSvg } from './qr.js';
+import { shareLinkDialog } from './share.js';
 import { addPosition } from './sales.js';
 import { addStockDialog } from './stock.js';
 import {
@@ -135,60 +135,19 @@ function onPowerClick(e) {
 }
 
 // Geheimer Link zur Nur-Lese-Ansicht strom.html für den, der den Strom zahlt
-async function shareDialog() {
+function shareDialog() {
   const who = ctx.app.settings.powerPayee;
-  let share;
-  try {
-    share = await ctx.app.backend.share();
-  } catch (err) {
-    toast(err.message, 'error');
-    return;
-  }
-  const link = (s) => new URL(`strom.html#t=${s.token}`, location.href).href;
-  const body = (s) => (s.token
-    ? `<p>Mit diesem Link sieht ${esc(who)} den offenen Strombetrag, die Drucke seit der letzten Abrechnung und alle bisherigen Abrechnungen. Ändern kann ${esc(who)} nichts, Kunden und Belege bleiben verborgen.</p>
-      <div class="share-box">
-        <div class="share-qr">${qrSvg(link(s), { border: 2, title: 'Link als QR-Code' })}</div>
-        <div class="share-link"><span class="copy-row"><input id="share-link" readonly value="${esc(link(s))}" aria-label="Link"><button class="btn" type="button" data-share="copy">Kopieren</button></span>
-          <p class="small muted">Per Nachricht schicken oder den QR-Code mit dem Handy von ${esc(who)} scannen. Seit ${dateDe(s.createdAt)} gültig.</p></div>
-      </div>`
-    : `<p>Ein geheimer Link, mit dem ${esc(who)} den offenen Strombetrag und die Abrechnungen ansehen kann, ohne Passwort und ohne etwas ändern zu können.</p>`);
-  const foot = (s) => (s.token
-    ? '<button type="button" class="btn danger" data-share="stop">Link zurückziehen</button><span class="spacer"></span><button type="button" class="btn" data-share="new">Neuer Link</button><button type="button" class="btn primary" data-close>Fertig</button>'
-    : '<span class="spacer"></span><button type="button" class="btn" data-close>Abbrechen</button><button type="button" class="btn primary" data-share="new">Link erstellen</button>');
-  const dlg = openDialog({ title: `Link für ${esc(who)}`, body: body(share), foot: foot(share) });
-  const redraw = (s) => {
-    share = s;
-    dlg.querySelector('.dlg-body').innerHTML = body(s);
-    dlg.querySelector('.dlg-foot').innerHTML = foot(s);
-  };
-  dlg.addEventListener('click', async (e) => {
-    const b = e.target.closest('[data-share]');
-    if (!b) return;
-    try {
-      if (b.dataset.share === 'copy') {
-        await navigator.clipboard.writeText(link(share)).then(() => toast('Link kopiert'), () => {
-          dlg.querySelector('#share-link').select();
-          toast('Link markiert, jetzt kopieren');
-        });
-      }
-      if (b.dataset.share === 'new') {
-        // Bei einem bestehenden Link erst nachfragen: der alte geht dann nicht mehr
-        if (share.token && !b.dataset.sure) {
-          b.dataset.sure = '1';
-          b.textContent = 'Alter Link geht dann nicht mehr. Sicher?';
-          return;
-        }
-        redraw(await ctx.app.backend.newShare());
-        toast(`Link für ${who} erstellt`);
-      }
-      if (b.dataset.share === 'stop') {
-        redraw(await ctx.app.backend.stopShare());
-        toast('Link zurückgezogen, er funktioniert nicht mehr');
-      }
-    } catch (err) {
-      toast(err.message, 'error');
-    }
+  const b = ctx.app.backend;
+  shareLinkDialog({
+    title: `Link für ${esc(who)}`,
+    page: 'strom.html',
+    intro: (has) => (has
+      ? `Mit diesem Link sieht ${esc(who)} den offenen Strombetrag, die Drucke seit der letzten Abrechnung und alle bisherigen Abrechnungen. Ändern kann ${esc(who)} nichts, Kunden und Belege bleiben verborgen.`
+      : `Ein geheimer Link, mit dem ${esc(who)} den offenen Strombetrag und die Abrechnungen ansehen kann, ohne Passwort und ohne etwas ändern zu können.`),
+    hint: `Per Nachricht schicken oder den QR-Code mit dem Handy von ${esc(who)} scannen.`,
+    get: () => b.share(),
+    create: () => b.newShare(),
+    remove: () => b.stopShare(),
   });
 }
 

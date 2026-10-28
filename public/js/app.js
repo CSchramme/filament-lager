@@ -11,6 +11,7 @@ import { renderAuswertung } from './auswertung.js';
 import { renderCalculator } from './calculator.js';
 import { pickColor, swatchesHtml } from './farben.js';
 import { openLabels } from './labels.js';
+import { shareLinkDialog } from './share.js';
 import { deliveriesHtml, deliveryDialog, receiveDialog } from './lieferungen.js';
 import { renderPreise } from './preise.js';
 import { renderPrints } from './prints.js';
@@ -298,6 +299,7 @@ function renderLager() {
         <button class="btn" type="button" data-action="shopping">${icons.cart}Einkaufsliste</button>
         <button class="btn" type="button" data-action="delivery-add">${icons.truck}Paket</button>
         <button class="btn" type="button" data-action="labels">${icons.qr}Etiketten</button>
+        ${app.backend.mode === 'server' ? `<button class="btn" type="button" data-action="color-share">${icons.palette}Farbkarte</button>` : ''}
         <button class="btn primary" type="button" data-action="add">${icons.plus} Spule</button>
       </span>
     </section>
@@ -1509,6 +1511,17 @@ const actions = {
   }),
   shopping: () => openShoppingList(app, { onDelivery: deliveriesChanged }),
   'delivery-add': () => deliveryDialog(app, null, { onDone: deliveriesChanged }),
+  'color-share': () => shareLinkDialog({
+    title: 'Farbkarte für Kunden',
+    page: 'farben.html',
+    intro: (has) => (has
+      ? 'Über diesen Link sehen Kunden ohne Passwort, welche Filamentfarben gerade da sind (nach Material, „nur noch wenig“ unter 300 g) und welche bald kommen. Gramm, Preise und Lagerorte sehen sie nicht.'
+      : 'Ein Link, über den Kunden sehen, welche Filamentfarben du gerade hast, z. B. zum Aussuchen vor einer Bestellung. Die Seite ist immer aktuell.'),
+    hint: 'In eine Nachricht, auf Social Media oder als QR-Code auf einen Flyer.',
+    get: () => app.backend.colorShare(),
+    create: () => app.backend.newColorShare(),
+    remove: () => app.backend.stopColorShare(),
+  }),
   labels: () => labelsDialog(),
   'reset-filter': () => {
     Object.assign(prefs, { q: '', chip: 'alle', material: '' });

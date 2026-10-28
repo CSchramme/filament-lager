@@ -933,3 +933,10 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
 /* Beleg und Etiketten über der App (als App vom Home-Bildschirm) */
 .doc-overlay { position: fixed; inset: 0; z-index: 1000; background: #EEF1F4; padding-top: env(safe-area-inset-top, 0px); }
 .doc-overlay iframe { display: block; width: 100%; height: 100%; border: 0; background: #EEF1F4; }
+
+/* Farbkarte (farben.html) */
+.chart-colors { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px 8px; }
+.chart-color { display: grid; justify-items: center; gap: 6px; text-align: center; }
+.chart-color .color-dot { width: 52px; height: 52px; }
+.chart-color .color-name { display: grid; gap: 2px; font-size: var(--step--1); font-weight: 700; }
+.chart-color .color-name small { font-weight: 400; color: var(--ink-3); }

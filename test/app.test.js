@@ -877,3 +877,24 @@ test('Verschenkt: anlegen zieht vom Vorrat ab, löschen bringt zurück, kein Bel
   assert.equal(del.body.gifts.length, 0);
   assert.equal(del.body.stock.find((x) => x.id === item.id).onHand, 5);
 });
+
+test('Farbkarte: Link ohne Passwort, nur Farben, kein Gramm', async () => {
+  const view = (token) => fetch(base + '/api/farbkarte', { headers: token ? { 'X-Zugang': token } : {} });
+  assert.equal((await view()).status, 403);
+  const { body: link } = await call('POST', '/api/farbkarte/link', {});
+  assert.match(link.token, /^[A-Za-z0-9_-]{24}$/);
+  const res = await view(link.token);
+  assert.equal(res.status, 200);
+  const d = await res.json();
+  assert.ok(d.materials.length > 0);
+  const text = JSON.stringify(d);
+  for (const secret of ['netWeight', 'grams', 'location', 'price', '"nr"']) assert.equal(text.includes(secret), false, secret);
+  assert.ok(d.materials.every((m) => m.colors.every((c) => ['da', 'wenig'].includes(c.level))));
+  // anderer Schlüssel als die Strom-Ansicht
+  const { body: strom } = await call('POST', '/api/teilen', {});
+  assert.equal((await view(strom.token)).status, 403);
+  await call('DELETE', '/api/teilen');
+  await call('DELETE', '/api/farbkarte/link');
+  assert.equal((await view(link.token)).status, 403);
+  assert.equal((await fetch(base + '/farben.html')).status, 200);
+});

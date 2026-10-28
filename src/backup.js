@@ -24,6 +24,7 @@ export function withoutSecrets(data) {
   if (copy.notify) copy.notify = { ...copy.notify, token: '' };
   if (copy.dhl) copy.dhl = { ...copy.dhl, apiKey: '' };
   if (copy.share) copy.share = { token: '', createdAt: '' };
+  if (copy.colorShare) copy.colorShare = { token: '', createdAt: '' };
   copy.apiKey = '';
   return copy;
 }

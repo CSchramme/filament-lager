@@ -6,7 +6,7 @@ import express from 'express';
 import {
   applyPriceChanges, applyStockSale, archiveSpool, colorNameFor, openPower, mergeStock, newId, normalizeCustomer, normalizeExpense, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
   normalizeSettings, normalizeSpool, normalizeStockItem, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
-  validTrackingNumber, ORDER_STEPS, advanceOrder, newToken, normalizeDelivery, normalizeGift, normalizeOrder, setOrderStatus, spoolsFromDelivery, trackingUrl,
+  validTrackingNumber, ORDER_STEPS, advanceOrder, colorChart, newToken, normalizeDelivery, normalizeGift, normalizeOrder, setOrderStatus, spoolsFromDelivery, trackingUrl,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import {
@@ -107,8 +107,8 @@ export function createApp({
   // Nur-Lese-Ansicht der Stromabrechnung (z. B. für Papa) über einen geheimen
   // Link: strom.html#t=… schickt den Schlüssel im Header, damit er nicht in
   // Server-Protokollen landet. Zeigt nur Strom, keine Kunden oder Belege.
-  const shareOk = (token) => {
-    const want = store.data.share && store.data.share.token;
+  const shareOk = (token, key = 'share') => {
+    const want = store.data[key] && store.data[key].token;
     if (!want || !token) return false;
     const h = (v) => crypto.createHash('sha256').update(String(v)).digest();
     return crypto.timingSafeEqual(h(token), h(want));
@@ -141,6 +141,14 @@ export function createApp({
       lastSync: c.lastTasksAt || '',
       generatedAt: new Date().toISOString(),
     });
+  });
+
+  // Farbkarte für Kunden: farben.html#t=… zeigt, welche Farben gerade da sind
+  // (ohne Gramm, Preise oder Lagerorte), und was unterwegs ist.
+  app.get('/api/farbkarte', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (!shareOk(req.get('x-zugang'), 'colorShare')) throw new HttpError(403, 'Dieser Link gilt nicht mehr. Bitte nach einem neuen fragen.');
+    res.json({ seller: store.settings.sellerName, ...colorChart(store.spools, store.data.deliveries || []), updatedAt: new Date().toISOString() });
   });
 
   // Bestellstatus für den Kunden: bestellung.html#t=… schickt den Schlüssel der
@@ -480,19 +488,24 @@ export function createApp({
     res.json({ ok: true, before, ...(await backupsView()) });
   });
 
-  // Link zur Strom-Ansicht erstellen, ansehen oder zurückziehen
-  const shareView = () => ({ token: (store.data.share && store.data.share.token) || '', createdAt: (store.data.share && store.data.share.createdAt) || '' });
-  app.get('/api/teilen', (req, res) => res.json(shareView()));
-  app.post('/api/teilen', async (req, res) => {
-    store.data.share = { token: crypto.randomBytes(18).toString('base64url'), createdAt: new Date().toISOString() };
-    await store.save();
-    res.json(shareView());
-  });
-  app.delete('/api/teilen', async (req, res) => {
-    store.data.share = { token: '', createdAt: '' };
-    await store.save();
-    res.json(shareView());
-  });
+  // Geheime Links erstellen, ansehen oder zurückziehen: Strom-Ansicht (share)
+  // und Farbkarte (colorShare)
+  function shareRoutes(url, key) {
+    const view = () => ({ token: (store.data[key] && store.data[key].token) || '', createdAt: (store.data[key] && store.data[key].createdAt) || '' });
+    app.get(url, (req, res) => res.json(view()));
+    app.post(url, async (req, res) => {
+      store.data[key] = { token: crypto.randomBytes(18).toString('base64url'), createdAt: new Date().toISOString() };
+      await store.save();
+      res.json(view());
+    });
+    app.delete(url, async (req, res) => {
+      store.data[key] = { token: '', createdAt: '' };
+      await store.save();
+      res.json(view());
+    });
+  }
+  shareRoutes('/api/teilen', 'share');
+  shareRoutes('/api/farbkarte/link', 'colorShare');
 
   // Filament-Lieferungen: bestellte Rollen mit DHL-Sendungsnummer. Beim
   // Ankommen werden daraus Rollen im Lager mit Kaufpreis und Kaufdatum.
