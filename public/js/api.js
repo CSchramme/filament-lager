@@ -3,7 +3,7 @@
 // das Lager im Browser; die Bambu-Anbindung ist dann nicht verfügbar.
 import {
   advanceOrder, applyPriceChanges, applyStockSale, archiveSpool, assignNumbers, mergeStock, migratePriceList, newId, nextOfferNr, nextReceiptNr, normalizeCustomer,
-  normalizeArchivedSpool, normalizeExpense, normalizeGift, normalizeOffer, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
+  normalizeArchivedSpool, normalizeExpense, normalizeGift, normalizeOffer, normalizeProduct, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
   normalizeDelivery, normalizeOrder, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary, setOrderStatus, spoolsFromDelivery,
 } from './domain.js';
 import { seedSpools } from './seed.js';
@@ -56,6 +56,10 @@ class ServerBackend {
   setTracking(id, number) { return this.req('PUT', 'api/verkaeufe/' + encodeURIComponent(id) + '/sendung', { number }); }
   checkTracking(id) { return this.req('POST', 'api/verkaeufe/' + encodeURIComponent(id) + '/sendung/pruefen', {}); }
   dhlSettings() { return this.req('GET', 'api/dhl'); }
+  products() { return this.req('GET', 'api/katalog'); }
+  addProduct(x) { return this.req('POST', 'api/katalog', x); }
+  updateProduct(id, x) { return this.req('PUT', 'api/katalog/' + encodeURIComponent(id), x); }
+  deleteProduct(id) { return this.req('DELETE', 'api/katalog/' + encodeURIComponent(id)); }
   gifts() { return this.req('GET', 'api/geschenke'); }
   addGift(g) { return this.req('POST', 'api/geschenke', g); }
   updateGift(id, g) { return this.req('PUT', 'api/geschenke/' + encodeURIComponent(id), g); }
@@ -180,6 +184,7 @@ class LocalBackend {
         spoolArchive: (Array.isArray(raw.spoolArchive) ? raw.spoolArchive : []).map((x) => normalizeArchivedSpool(x)),
         deliveries: (Array.isArray(raw.deliveries) ? raw.deliveries : []).map((x) => normalizeDelivery(x)),
         gifts: (Array.isArray(raw.gifts) ? raw.gifts : []).map((x) => normalizeGift(x)),
+        products: (Array.isArray(raw.products) ? raw.products : []).map((x) => normalizeProduct(x, { now: x.updatedAt })),
       };
       // Verkäufe aus der Zeit vor den Belegnummern nachnummerieren, ältester zuerst.
       for (const sale of [...data.sales].reverse()) if (!sale.nr) sale.nr = nextReceiptNr(data, sale.date);
@@ -189,7 +194,7 @@ class LocalBackend {
     }
     const data = {
       settings: normalizeSettings(), spools: seedSpools(), nextNr: 1, sales: [], receiptSeq: {}, powerPayments: [], offers: [], offerSeq: {}, stock: [],
-      customers: [], expenses: [], spoolArchive: [], deliveries: [], gifts: [],
+      customers: [], expenses: [], spoolArchive: [], deliveries: [], gifts: [], products: [],
     };
     this.write(data);
     return data;
@@ -360,6 +365,14 @@ class LocalBackend {
   async updateCustomer(id, c) { return this.updateIn('customers', normalizeCustomer, id, c, needName); }
 
   async deleteCustomer(id) { return this.removeFrom('customers', id); }
+
+  async products() { return this.listOf('products'); }
+
+  async addProduct(x) { return this.addTo('products', normalizeProduct, x, needName); }
+
+  async updateProduct(id, x) { return this.updateIn('products', normalizeProduct, id, x, needName); }
+
+  async deleteProduct(id) { return this.removeFrom('products', id); }
 
   async expenses() { return this.listOf('expenses'); }
 

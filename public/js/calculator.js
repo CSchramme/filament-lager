@@ -7,6 +7,7 @@ import {
 } from './domain.js';
 import { parseModelFile } from './model.js';
 import { addPosition, draftTotals, loadDraft } from './sales.js';
+import { productDialog } from './katalog.js';
 import { addStockDialog } from './stock.js';
 import {
   esc, fmt, fmtCt, fmtDuration, fmtEur, fmtNum, patchText, ring, toast,
@@ -179,6 +180,7 @@ function bind() {
     if (b.dataset.calc === 'book') bookPrint();
     if (b.dataset.calc === 'add') addToReceipt();
     if (b.dataset.calc === 'stock') addToStock();
+    if (b.dataset.calc === 'catalog') addToCatalog();
     if (b.dataset.calc === 'receipt') ctx.go('verkauf');
     if (b.dataset.calc === 'save-price') savePrice();
   });
@@ -428,6 +430,7 @@ function updateResult(full = true) {
     <div class="actions">
       <button class="btn primary" type="button" data-calc="add">Zum Beleg hinzufügen</button>
       <button class="btn" type="button" data-calc="stock">Auf Vorrat legen${q.qty > 1 ? ` (${q.qty} Stück)` : ''}</button>
+      <button class="btn" type="button" data-calc="catalog">In den Katalog</button>
       <button class="btn" type="button" data-calc="copy">Angebot kopieren</button>
       ${s ? `<button class="btn" type="button" data-calc="book">${fmtNum(need)} g von #${s.nr} abziehen</button>` : ''}
     </div>
@@ -466,6 +469,17 @@ async function copyOffer() {
 }
 
 const modelTitle = () => (calc.job ? calc.job.title : calc.model ? calc.model.name.replace(/\.(gcode\.)?(stl|3mf)$/i, '') : 'Druck');
+
+// Das gerechnete Teil in den Katalog (Gramm und Zeit pro Stück)
+function addToCatalog() {
+  const q = quote();
+  productDialog(ctx.app, null, {
+    prefill: {
+      name: modelTitle(), grams: q.grams, seconds: q.seconds, perPlate: calc.perPrint, material: q.spool ? q.spool.material : (calc.material || 'PLA Basic'),
+      file: calc.model ? calc.model.name : '',
+    },
+  });
+}
 
 // Mehrere gleiche Teile auf Vorrat, die später einzeln verkauft werden.
 function addToStock() {

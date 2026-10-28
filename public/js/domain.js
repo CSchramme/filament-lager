@@ -552,6 +552,7 @@ export function normalizeSaleItem(input) {
     kind: ['versand', 'hand'].includes(src.kind) ? src.kind : '', // Versand oder Position von Hand
     discountPct: Math.max(0, toMoney(src.discountPct) ?? 0), // Mengenrabatt in %
     stockId: str(src.stockId), // aus dem Vorrat verkauft
+    productId: str(src.productId), // aus dem Katalog
     batchQty: Math.max(1, toInt(src.batchQty, qty)), // auf so viele Teile ist die Arbeit verteilt
     breakdown,
     // Beträge für alle Stück dieser Position
@@ -1002,6 +1003,99 @@ export function applyStockSale(stock, sale, sign = -1, field = 'sold') {
     item.onHand = Math.max(0, item.onHand + sign * qty);
     item[field] = Math.max(0, (item[field] || 0) - sign * qty);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Katalog: Teile, die du immer wieder druckst und verkaufst, mit Foto, Preis,
+// Gramm und Druckzeit pro Stück. Daraus kommen Positionen in den Beleg und
+// Vorschläge für Restrollen.
+
+const PHOTO = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+
+export function normalizeProduct(input, { now = new Date().toISOString() } = {}) {
+  const src = input && typeof input === 'object' ? input : {};
+  const photo = str(src.photo);
+  return {
+    id: str(src.id) || newId(),
+    name: str(src.name),
+    description: String(src.description ?? '').trim().slice(0, 1000),
+    price: Math.max(0, toMoney(src.price) ?? 0), // fester Verkaufspreis pro Stück, 0 = berechnen
+    grams: Math.max(0, Math.round((Number(src.grams) || 0) * 10) / 10), // pro Stück
+    seconds: Math.max(0, Math.round(Number(src.seconds) || 0)), // pro Stück
+    perPlate: Math.min(500, Math.max(1, toInt(src.perPlate, 1))), // Stück pro Druck
+    material: str(src.material) || 'PLA Basic',
+    file: str(src.file).slice(0, 500), // Druckdatei oder Link (z. B. MakerWorld)
+    photo: photo.length < 600000 && PHOTO.test(photo) ? photo : '', // verkleinert, als Daten-URL
+    createdAt: str(src.createdAt) || now,
+    updatedAt: now,
+  };
+}
+
+// Preis pro Stück: fest oder berechnet (Filament der Filamentart aus der
+// Preisliste, Arbeit verteilt auf die Teile eines Drucks)
+export function productQuote(product, settings, spool = null) {
+  const perGram = spool ? pricePerGram(spool, settings) : (() => {
+    const e = listPrice(product.material, settings);
+    return e ? e.price / e.weight : settings.pricePerKg / 1000;
+  })();
+  const q = priceQuote({
+    grams: product.grams, perGram, seconds: product.seconds, qty: product.perPlate,
+  }, { ...settings, minPrice: 0 });
+  return { ...q, perGram, piece: product.price || q.piece, fixed: product.price > 0 };
+}
+
+// Verkauft: Positionen mit der Katalognummer, ältere über den gleichen Namen
+export function productStats(product, sales) {
+  const name = product.name.trim().toLowerCase();
+  let qty = 0;
+  let revenue = 0;
+  let last = '';
+  for (const s of sales) {
+    for (const i of s.items) {
+      if (i.productId ? i.productId !== product.id : i.title.trim().toLowerCase() !== name) continue;
+      qty += i.qty;
+      revenue += i.price;
+      if (s.date > last) last = s.date;
+    }
+  }
+  return { qty, revenue: cents(revenue), last };
+}
+
+// Reste verwerten: Für Rollen mit wenig Filament (bis max g oder "knapp")
+// Teile aus dem Katalog und einfarbige Drucke aus dem Verlauf, die noch
+// reinpassen. Zuerst die, bei denen am wenigsten übrig bleibt.
+export function leftoverIdeas({
+  spools, products = [], tasks = [], settings, max = 150, perSpool = 5,
+}) {
+  const rests = spools.filter((s) => s.netWeight >= 3 && (s.netWeight <= max || stockLevel(s, settings) === 'knapp'))
+    .sort((a, b) => a.netWeight - b.netWeight);
+  const names = new Set(products.map((p) => p.name.trim().toLowerCase()));
+  const seenTask = new Set();
+  const fromTasks = [];
+  for (const t of tasks) {
+    const fils = t.filaments || [];
+    const key = t.title.trim().toLowerCase();
+    if (t.status !== 2 || fils.length > 1 || !(t.grams > 0) || names.has(key) || seenTask.has(key)) continue;
+    seenTask.add(key);
+    fromTasks.push({
+      title: t.title, grams: t.grams, type: fils[0] ? fils[0].type : '', source: 'verlauf', taskId: t.id,
+    });
+  }
+  const fromProducts = products.filter((p) => p.grams > 0).map((p) => ({
+    title: p.name, grams: p.grams, type: p.material, source: 'katalog', productId: p.id,
+  }));
+  return rests.map((s) => {
+    const type = filamentTypeOf(s.material);
+    const ideas = [...fromProducts, ...fromTasks]
+      .filter((i) => i.grams <= s.netWeight && (!i.type || filamentTypeOf(i.type) === type))
+      .map((i) => {
+        const count = Math.floor(s.netWeight / i.grams);
+        return { ...i, count, left: Math.round((s.netWeight - count * i.grams) * 10) / 10 };
+      })
+      .sort((a, b) => a.left - b.left || (a.source === 'katalog' ? -1 : 1) || a.title.localeCompare(b.title, 'de'))
+      .slice(0, perSpool);
+    return { spool: s, ideas };
+  });
 }
 
 // ---------------------------------------------------------------------------

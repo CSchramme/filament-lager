@@ -8,6 +8,7 @@ import { openJob } from './calculator.js';
 import { openPowerStatement } from './documents.js';
 import { shareLinkDialog } from './share.js';
 import { addPosition } from './sales.js';
+import { productDialog } from './katalog.js';
 import { addStockDialog } from './stock.js';
 import {
   dateDe, esc, fmtCt, fmtDuration, fmtEur, fmtNum, icons, localDay, openDialog, plural, tile, timeAgo, toast,
@@ -181,6 +182,7 @@ function taskCard(t) {
       <button class="btn small" type="button" data-task="stock">Auf Vorrat</button>
       <button class="btn small" type="button" data-task="calc">Im Rechner</button>
       <button class="btn small" type="button" data-task="reprint">Erneut drucken</button>
+      <button class="btn small" type="button" data-task="catalog">In den Katalog</button>
       ${t.status === 2 ? bookButton((history.bookings || {})[t.id]) : ''}
     </div>
   </article>`;
@@ -264,6 +266,16 @@ async function onHistoryClick(e) {
     });
   }
   if (b.dataset.task === 'reprint') reprintDialog(task);
+  if (b.dataset.task === 'catalog') {
+    const main = quoteFor(task).parts.filter((p) => p.spool).sort((a, c) => c.grams - a.grams)[0];
+    productDialog(ctx.app, null, {
+      prefill: {
+        name: task.title, grams: task.grams, seconds: task.seconds, perPlate: 1, material: main ? main.spool.material : 'PLA Basic',
+        file: task.designId ? `https://makerworld.com/de/models/${task.designId}` : '',
+      },
+      plate: { grams: task.grams, seconds: task.seconds },
+    });
+  }
   if (b.dataset.task === 'book' || b.dataset.task === 'undo') {
     b.disabled = true;
     try {

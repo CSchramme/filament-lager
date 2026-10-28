@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  assignNumbers, migratePriceList, normalizeArchivedSpool, normalizeDelivery, normalizeGift, nextReceiptNr, normalizeCustomer, normalizeExpense, normalizeOffer, normalizePowerPayment, normalizeSale,
+  assignNumbers, migratePriceList, normalizeArchivedSpool, normalizeDelivery, normalizeGift, normalizeProduct, nextReceiptNr, normalizeCustomer, normalizeExpense, normalizeOffer, normalizePowerPayment, normalizeSale,
   normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
@@ -66,6 +66,7 @@ export function dataFromRaw(raw) {
   data.deliveries = (Array.isArray(raw.deliveries) ? raw.deliveries : []).map((x) => normalizeDelivery(x));
   data.geo = normalizeGeo(raw.geo);
   data.gifts = (Array.isArray(raw.gifts) ? raw.gifts : []).map((x) => normalizeGift(x));
+  data.products = (Array.isArray(raw.products) ? raw.products : []).map((x) => normalizeProduct(x, { now: x.updatedAt }));
   data.colorShare = { token: String((raw.colorShare && raw.colorShare.token) || ''), createdAt: String((raw.colorShare && raw.colorShare.createdAt) || '') };
   assignNumbers(data);
   data.settings.places = placeList(data.settings, data.spools);
@@ -95,7 +96,7 @@ export class Store {
     } else {
       this.data = {
         version: 1, settings: normalizeSettings(), spools: seedSpools(), bambu: emptyBambu(), nextNr: 1, apiKey: '', tasks: [], sales: [], receiptSeq: {}, powerPayments: [],
-        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [], customers: [], expenses: [], dhl: normalizeDhl(), spoolArchive: [], share: { token: '', createdAt: '' }, autoBook: normalizeAutoBook(), deliveries: [], geo: normalizeGeo(), gifts: [], colorShare: { token: '', createdAt: '' },
+        offers: [], offerSeq: {}, notify: normalizeNotify(), stock: [], customers: [], expenses: [], dhl: normalizeDhl(), spoolArchive: [], share: { token: '', createdAt: '' }, autoBook: normalizeAutoBook(), deliveries: [], geo: normalizeGeo(), gifts: [], products: [], colorShare: { token: '', createdAt: '' },
       };
       await this.save();
     }

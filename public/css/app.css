@@ -121,14 +121,14 @@ body::before {
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
-.topbar .wrap { display: flex; align-items: center; gap: 20px; min-height: 60px; flex-wrap: wrap; }
+.topbar .wrap { display: flex; align-items: center; gap: 16px; min-height: 60px; flex-wrap: wrap; }
 .brand { display: flex; align-items: center; gap: 10px; font-family: var(--font-display); font-stretch: 118%; font-weight: 800; font-size: var(--step-1); letter-spacing: -.01em; }
 .brand svg { width: 28px; height: 28px; }
-.tabs { display: flex; gap: 4px; margin-left: auto; }
+.tabs { display: flex; gap: 2px; margin-left: auto; }
 .tab {
   border: 0;
   background: none;
-  padding: 8px 12px;
+  padding: 8px 10px;
   border-radius: var(--radius-sm);
   color: var(--ink-2);
   font-weight: 700;
@@ -658,9 +658,9 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
 .toast { background: var(--ink); color: var(--surface); padding: 10px 14px; border-radius: var(--radius-sm); box-shadow: var(--shadow); font-weight: 700; font-size: var(--step--1); }
 .toast.error { background: var(--crit); color: #fff; }
 
-/* Menü: bis 1140 px Breite (Handy, Tablet) stehen die Bereiche hinter einem Menü-Knopf */
+/* Menü: bis 1180 px Breite (Handy, Tablet) stehen die Bereiche hinter einem Menü-Knopf */
 .menu-btn { display: none; }
-@media (max-width: 1140px) {
+@media (max-width: 1180px) {
   .topbar .wrap { gap: 10px; padding-block: 8px; flex-wrap: nowrap; }
   .menu-btn {
     display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px;
@@ -940,3 +940,30 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
 .chart-color .color-dot { width: 52px; height: 52px; }
 .chart-color .color-name { display: grid; gap: 2px; font-size: var(--step--1); font-weight: 700; }
 .chart-color .color-name small { font-weight: 400; color: var(--ink-3); }
+
+/* Katalog */
+.product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+.product-card { display: grid; grid-template-rows: auto 1fr auto; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
+.product-photo { display: block; width: 100%; aspect-ratio: 4 / 3; padding: 0; border: 0; background: var(--surface-2); cursor: pointer; }
+.product-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.product-nophoto { display: grid; place-items: center; height: 100%; color: var(--ink-3); }
+.product-nophoto svg { width: 40px; height: 40px; }
+.product-body { display: grid; gap: 4px; padding: 10px 12px; align-content: start; }
+.product-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.product-price { font-weight: 700; white-space: nowrap; }
+.product-price small { font-weight: 400; color: var(--ink-3); }
+.product-file { overflow-wrap: anywhere; }
+.product-actions { padding: 0 12px 12px; }
+.product-edit { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 14px; align-items: start; margin-bottom: 12px; }
+.product-photo-pick { width: 120px; aspect-ratio: 1; border: 1px dashed var(--line); border-radius: var(--radius-sm); display: grid; place-items: center; cursor: pointer; overflow: hidden; background: var(--surface-2); }
+.product-photo-pick [data-photo] { display: grid; justify-items: center; gap: 4px; color: var(--ink-2); font-size: var(--step--1); width: 100%; height: 100%; place-items: center; }
+.product-photo-pick img { width: 100%; height: 100%; object-fit: cover; }
+@media (max-width: 480px) { .product-edit { grid-template-columns: 90px minmax(0, 1fr); } .product-photo-pick { width: 90px; } }
+.color-name small { display: block; }
+
+/* Reste verwerten */
+.rest-list { display: grid; gap: 12px; }
+.rest-item { border-top: 1px solid var(--line); padding-top: 8px; }
+.rest-spool { display: flex; align-items: center; gap: 6px; }
+.rest-spool .num { margin-left: auto; }
+.rest-item ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 3px; }

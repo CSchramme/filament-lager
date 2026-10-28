@@ -9,8 +9,10 @@ import {
 } from './ui.js';
 import { renderAuswertung } from './auswertung.js';
 import { renderCalculator } from './calculator.js';
+import { renderKatalog } from './katalog.js';
 import { pickColor, swatchesHtml } from './farben.js';
 import { openLabels } from './labels.js';
+import { openLeftovers } from './reste.js';
 import { shareLinkDialog } from './share.js';
 import { deliveriesHtml, deliveryDialog, receiveDialog } from './lieferungen.js';
 import { renderPreise } from './preise.js';
@@ -21,7 +23,7 @@ import { renderVerkauf } from './verkauf.js';
 
 // Bereiche der App, in dieser Reihenfolge als Reiter bzw. im Menü
 const VIEWS = [
-  ['lager', 'Lager'], ['plaetze', 'Plätze'], ['preise', 'Preisliste'], ['rechner', 'Rechner'], ['verkauf', 'Verkauf'], ['drucke', 'Drucke'],
+  ['lager', 'Lager'], ['plaetze', 'Plätze'], ['preise', 'Preisliste'], ['rechner', 'Rechner'], ['katalog', 'Katalog'], ['verkauf', 'Verkauf'], ['drucke', 'Drucke'],
   ['auswertung', 'Auswertung'], ['bambu', 'Bambu'], ['einstellungen', 'Einstellungen'],
 ];
 
@@ -213,6 +215,7 @@ function route() {
   else if (app.view === 'preise') renderPreise($view, app);
   else if (app.view === 'rechner') renderCalculator($view, app, { spoolUpdated, go });
   else if (app.view === 'verkauf') renderVerkauf($view, app, { go });
+  else if (app.view === 'katalog') renderKatalog($view, app, { go });
   else if (app.view === 'drucke') renderPrints($view, app, { go });
   else if (app.view === 'auswertung') renderAuswertung($view, app);
   else if (app.view === 'bambu') renderBambu();
@@ -298,6 +301,7 @@ function renderLager() {
       <span class="toolbar-actions">
         <button class="btn" type="button" data-action="shopping">${icons.cart}Einkaufsliste</button>
         <button class="btn" type="button" data-action="delivery-add">${icons.truck}Paket</button>
+        <button class="btn" type="button" data-action="leftovers">${icons.box}Reste</button>
         <button class="btn" type="button" data-action="labels">${icons.qr}Etiketten</button>
         ${app.backend.mode === 'server' ? `<button class="btn" type="button" data-action="color-share">${icons.palette}Farbkarte</button>` : ''}
         <button class="btn primary" type="button" data-action="add">${icons.plus} Spule</button>
@@ -1511,6 +1515,7 @@ const actions = {
   }),
   shopping: () => openShoppingList(app, { onDelivery: deliveriesChanged }),
   'delivery-add': () => deliveryDialog(app, null, { onDone: deliveriesChanged }),
+  leftovers: () => openLeftovers(app, { go }),
   'color-share': () => shareLinkDialog({
     title: 'Farbkarte für Kunden',
     page: 'farben.html',

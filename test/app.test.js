@@ -898,3 +898,14 @@ test('Farbkarte: Link ohne Passwort, nur Farben, kein Gramm', async () => {
   assert.equal((await view(link.token)).status, 403);
   assert.equal((await fetch(base + '/farben.html')).status, 200);
 });
+
+test('Katalog: Teile anlegen, ändern, löschen', async () => {
+  assert.equal((await call('POST', '/api/katalog', { name: '' })).status, 400);
+  const made = await call('POST', '/api/katalog', { name: 'Kürbis', grams: '8', perPlate: 25, price: '1,50', photo: 'data:image/png;base64,iVBORw0KGgo=' });
+  assert.equal(made.status, 201);
+  assert.deepEqual([made.body.item.grams, made.body.item.perPlate, made.body.item.price], [8, 25, 1.5]);
+  const upd = await call('PUT', `/api/katalog/${made.body.item.id}`, { price: 2 });
+  assert.deepEqual([upd.body.item.price, upd.body.item.photo.startsWith('data:image/png')], [2, true]);
+  assert.equal((await call('GET', '/api/katalog')).body.products.length, 1);
+  assert.equal((await call('DELETE', `/api/katalog/${made.body.item.id}`)).body.products.length, 0);
+});

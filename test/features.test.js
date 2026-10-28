@@ -576,3 +576,43 @@ test('Farbkarte: Farben je Material, wenig unter 300 g, unter 50 g weg, bald da'
   ]);
   assert.deepEqual(c.coming.map((x) => [x.name, x.expectedAt]), [['Rot', '2026-11-02']]); // Schwarz ist genug da
 });
+
+test('Katalog: Preis fest oder berechnet, Verkaufszahlen, Reste-Vorschläge', async () => {
+  const {
+    leftoverIdeas, normalizeProduct, productQuote, productStats,
+  } = await import('../public/js/domain.js');
+  const s = { ...settings, roundTo: 0, discountPct: 0 };
+  const kuerbis = normalizeProduct({ name: 'Kürbis', grams: 8, seconds: 900, perPlate: 25, material: 'PLA Basic', photo: 'data:image/jpeg;base64,AAAA' });
+  assert.equal(kuerbis.photo, 'data:image/jpeg;base64,AAAA');
+  assert.equal(normalizeProduct({ name: 'X', photo: 'javascript:alert(1)' }).photo, '');
+  const q = productQuote(kuerbis, s);
+  assert.equal(q.fixed, false);
+  assert.equal(q.labor, 0.05); // 1,25 € Arbeit auf 25 Stück
+  assert.equal(productQuote({ ...kuerbis, price: 1.5 }, s).piece, 1.5);
+  // Verkauft: über die Katalognummer, ältere Belege über den Namen
+  const sales = [
+    normalizeSale({ date: '2026-10-01', items: [{ title: 'Kürbis', qty: 3, price: 4.5, productId: kuerbis.id }] }),
+    normalizeSale({ date: '2026-10-05', items: [{ title: 'kürbis', qty: 2, price: 3 }] }),
+    normalizeSale({ date: '2026-10-06', items: [{ title: 'Kürbis', qty: 9, price: 9, productId: 'anderes' }] }),
+  ];
+  assert.deepEqual(productStats(kuerbis, sales), { qty: 5, revenue: 7.5, last: '2026-10-05' });
+  // Über den offenen Beleg: Katalognummer wandert in den Beleg
+  saveDraft({ positions: [], customer: '', note: '' });
+  addPosition({ title: 'Kürbis', qty: 2, grams: 8, seconds: 900, perGram: 0.02, productId: kuerbis.id, piecePrice: 1.5 });
+  const sale = normalizeSale(saleFromDraft(loadDraft(), s, { date: '2026-10-28', customer: '', note: '' }));
+  assert.deepEqual([sale.items[0].productId, sale.items[0].price], [kuerbis.id, 3]);
+
+  // Reste: 85 g schwarz -> 10 Kürbisse (5 g Rest) oder 4 Clips (1 g Rest)
+  const rest = spool({ colorName: 'Schwarz', netWeight: 85 });
+  const full = spool({ colorName: 'Weiß', netWeight: 900 });
+  const petg = normalizeProduct({ name: 'PETG-Teil', grams: 5, material: 'PETG HF' });
+  const ideas = leftoverIdeas({
+    spools: [rest, full], products: [kuerbis, petg], settings, tasks: [
+      { id: 't1', title: 'Clip', status: 2, grams: 21, filaments: [{ type: 'PLA', grams: 21 }] },
+      { id: 't2', title: 'Bunt', status: 2, grams: 10, filaments: [{ type: 'PLA' }, { type: 'PLA' }] }, // mehrfarbig
+      { id: 't3', title: 'Abgebrochen', status: 3, grams: 5, filaments: [{ type: 'PLA' }] },
+    ],
+  });
+  assert.equal(ideas.length, 1); // die volle Rolle nicht
+  assert.deepEqual(ideas[0].ideas.map((i) => [i.title, i.count, i.left]), [['Clip', 4, 1], ['Kürbis', 10, 5]]);
+});

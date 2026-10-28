@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import express from 'express';
 import {
-  applyPriceChanges, applyStockSale, archiveSpool, colorNameFor, openPower, mergeStock, newId, normalizeCustomer, normalizeExpense, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
+  applyPriceChanges, applyStockSale, archiveSpool, colorNameFor, normalizeProduct, openPower, mergeStock, newId, normalizeCustomer, normalizeExpense, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
   normalizeSettings, normalizeSpool, normalizeStockItem, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
   validTrackingNumber, ORDER_STEPS, advanceOrder, colorChart, newToken, normalizeDelivery, normalizeGift, normalizeOrder, setOrderStatus, spoolsFromDelivery, trackingUrl,
 } from '../public/js/domain.js';
@@ -959,6 +959,9 @@ export function createApp({
   }
   collectionRoutes('kunden', 'customers', normalizeCustomer, (c) => {
     if (!c.name) throw new HttpError(400, 'Bitte einen Namen eingeben.');
+  });
+  collectionRoutes('katalog', 'products', normalizeProduct, (x) => {
+    if (!x.name) throw new HttpError(400, 'Bitte einen Namen für das Teil eingeben.');
   });
   collectionRoutes('ausgaben', 'expenses', normalizeExpense, (x) => {
     if (!x.amount) throw new HttpError(400, 'Bitte einen Betrag eingeben.');
