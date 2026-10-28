@@ -53,6 +53,12 @@ Manager** (Bambu Studio / Bambu Handy) und dem **AMS** verbinden.
 - **Automatische Sicherung** jeden Tag auf dem Server, zum Herunterladen und Zurückholen.
 - **API** zum Abrufen: Bestand je Farbe, Material und Platz, einzelne Rollen über ihre Nummer,
   AMS-Belegung (siehe unten).
+- **Katalog**: deine Teile mit Foto, Preis, Gramm, Druckzeit und Druckdatei; ein Antippen legt sie
+  mit der gewünschten Farbe in den Beleg, dazu wie oft jedes Teil verkauft wurde.
+- **Reste verwerten**: Für Rollen mit wenig Rest schlägt das Lager Teile vor, die noch reinpassen.
+- **Termine** für Abholung und Lieferung, mit Erinnerung am Vortag und Kalender-Datei.
+- **Farbkarte für Kunden**: ein Link ohne Passwort, der zeigt, welche Filamentfarben gerade da sind.
+- **Als App** auf iPad, iPhone und Android: eigenes Symbol, ohne Browserleiste.
 - Suchen, filtern (im AMS, geöffnet, ungeöffnet, knapp) und sortieren.
 - Spulen anlegen (auch mehrere gleiche auf einmal), bearbeiten, duplizieren, löschen. Filamentart
   und **Farbe aus dem Bambu-Lab-Sortiment** wählen wie im Bambu-Shop (46 Filamentarten, über 300
@@ -347,6 +353,21 @@ Unter **Verkauf**:
   lassen sich ergänzen, die Liste zeigt die Belege jedes Kunden. „Neuer Beleg“ setzt den Kunden in
   den offenen Beleg.
 
+### Termine für Abholung und Lieferung
+
+Im Bestelldialog eines Belegs (Lkw-Knopf) gibt es **Termin** (Datum und Uhrzeit) und eine **Notiz
+zum Termin**, z. B. „Hoftor benutzen“. Dann:
+
+- steht der Termin oben im Verkauf unter **Termine** (die nächsten zehn, nach Zeit);
+- kommt am Vortag eine **Erinnerung aufs Handy** (ntfy, „Termin morgen“), sobald der Termin weniger
+  als 24 Stunden entfernt ist. Ein gerade erst eingetragener Termin meldet sich nicht sofort.
+  Plesk hält die App im Leerlauf an; dann kommt die Erinnerung beim nächsten Öffnen;
+- legt **In den Kalender** bzw. „Kalender“ eine Kalender-Datei (.ics) an, mit Erinnerung eine
+  Stunde vorher; am iPad öffnet sie den Kalender;
+- sieht der Kunde den Termin auf seiner Bestellseite („Abholung am Samstag, 31. Oktober um
+  16:00 Uhr“), bei Abholung mit deiner Adresse vom Beleg, und kann ihn ebenfalls in seinen Kalender
+  übernehmen.
+
 ### Verschenkt: Proben und Geschenke
 
 Für Gratis-Proben, Geschenke und Werbung: im **offenen Beleg** auf „Verschenken“ oder im **Vorrat**
@@ -527,6 +548,48 @@ steht sie unter „Ersatz im Lager“ statt unter „Nachkaufen“. Der Preis is
 diese Sorte, sonst für das Material derselben Marke; dazu eine Summe. „Liste kopieren“ legt sie als
 Text in die Zwischenablage (für eine Notiz oder eine Nachricht), „Drucken“ als Liste zum Abhaken.
 
+## Katalog
+
+Der Reiter **Katalog** sammelt die Teile, die du immer wieder druckst und verkaufst:
+
+- **Teil anlegen** mit „Teil“, oder im **Rechner** bzw. bei einem Druck im **Druckverlauf** auf
+  „In den Katalog“ (Gramm und Druckzeit kommen mit; bei mehreren Teilen auf einer Platte „Stück pro
+  Druck“ eintragen, dann teilt das Lager Gramm und Zeit auf).
+- **Foto**: antippen, dann fotografieren oder ein Bild wählen; es wird verkleinert gespeichert.
+- **Preis**: fest (z. B. 2,50 €) oder leer, dann berechnet wie im Rechner mit dem Preis der
+  Filamentart aus der Preisliste und der Arbeit verteilt auf die Stück pro Druck.
+- **Druckdatei oder Link**, z. B. `kuerbis.3mf` oder der MakerWorld-Link (bei Drucken aus MakerWorld
+  automatisch).
+- **In den Beleg**: Anzahl und Farbe wählen (Rollen aus dem Lager mit passender Filamentart und genug
+  Filament), das Teil kommt in den offenen Beleg. Die Karte zeigt, **wie oft es verkauft** wurde,
+  den Umsatz und das letzte Datum; die Liste steht nach Verkäufen sortiert.
+
+### Reste verwerten
+
+Im **Lager** zeigt „Reste“ alle Rollen mit höchstens 150 g oder „knapp“ und dazu Teile, die noch
+reinpassen: aus dem Katalog und einfarbige Drucke aus dem Druckverlauf, zuerst die, bei denen am
+wenigsten übrig bleibt (z. B. „#15 Blau, 25 g: 3 × Kürbis klein, bleiben 1 g“).
+
+## Farbkarte für Kunden
+
+Im **Lager** erstellt „Farbkarte“ einen Link mit QR-Code zur Seite `farben.html`. Kunden sehen dort
+ohne Passwort, welche Filamentfarben gerade da sind, nach Material (z. B. PLA Basic, PETG HF), mit
+Farbfläche und Namen; „nur noch wenig“ unter 300 g, unter 50 g fehlt eine Farbe. Darunter „Kommt
+bald“ mit Farben aus bestellten Filament-Paketen. Gramm, Preise und Lagerorte sehen Kunden nicht.
+Die Seite ist immer aktuell. „Neuer Link“ macht den alten ungültig, „Link zurückziehen“ sperrt ihn.
+
+## Als App auf iPad, iPhone und Android
+
+Das Lager lässt sich wie eine App auf den Home-Bildschirm legen, mit eigenem Symbol und ohne
+Browserleiste:
+
+- **iPad/iPhone (Safari):** Teilen-Knopf → „Zum Home-Bildschirm“.
+- **Android (Chrome):** Menü → „App installieren“ bzw. „Zum Startbildschirm hinzufügen“.
+
+Belege, Abrechnungen und Etiketten erscheinen in der App über dem Lager („Schließen“ oben führt
+zurück). Die App braucht wie die Website eine Verbindung zum Server; beim ersten Start einmal mit
+dem Passwort anmelden, weil die App ihre eigene Anmeldung hat.
+
 ## Filament unterwegs
 
 Für Filament, das du bestellt hast, z. B. im Bambu Lab Store (liefert mit DHL):
@@ -560,7 +623,8 @@ Android:
 
 Gemeldet werden: **Druck fertig**, **Druck abgebrochen**, **Druck pausiert** (z. B. Filament leer
 oder ein Fehler am Drucker), **Rolle wird knapp oder leer** und **Paket zugestellt** (Pakete an Kunden und
-Filament-Pakete an dich, mit DHL-API-Schlüssel), jedes einzeln abschaltbar. Die
+Filament-Pakete an dich, mit DHL-API-Schlüssel), **Umsatz nähert sich der Kleinunternehmer-Grenze**
+und **Termin morgen**, jedes einzeln abschaltbar. Die
 Druckmeldungen brauchen eine Verbindung zum Drucker (Bambu-Konto oder Heimnetz unter „Bambu“).
 Eine knappe Rolle meldet sich nur einmal, erst nach dem Auffüllen wieder; was beim Einschalten schon
 knapp ist, wird nicht nachgemeldet. Tippen auf die Nachricht öffnet das Lager.
@@ -604,6 +668,12 @@ Ohne Eintrag gilt der Tag, an dem die Rolle angelegt wurde. Bei den Rollen aus d
 deshalb das Kaufdatum prüfen. Filament aus dem Lager nicht zusätzlich als Ausgabe eintragen, sonst
 zählt es doppelt. Die Übersicht ist eine geordnete Aufstellung, keine Steuerberatung; Kaufbelege
 aufheben.
+
+**Warnung vor der Kleinunternehmer-Grenze:** Ist unter Einstellungen „Kleinunternehmer“ an, kommt
+einmal je Stufe eine Nachricht aufs Handy, wenn der Umsatz im Jahr **20.000 €** erreicht (noch
+5.000 € bis 25.000 €; darüber gilt die Regelung ab dem nächsten Jahr nicht mehr), **25.000 €**,
+**80.000 €** und **100.000 €** (ab dann sofort Umsatzsteuer). Derselbe Hinweis steht im Verkauf über
+den Belegen.
 
 ## Sicherungen
 

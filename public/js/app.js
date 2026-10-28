@@ -1302,6 +1302,7 @@ const NOTIFY_EVENTS = [
   ['low', 'Rolle wird knapp oder leer'],
   ['delivered', 'Paket zugestellt (mit DHL-Schlüssel)'],
   ['umsatz', 'Umsatz nähert sich der Kleinunternehmer-Grenze'],
+  ['termin', 'Termin morgen (Abholung, Lieferung)'],
 ];
 
 const BACKUP_KINDS = { taeglich: 'täglich', manuell: 'von Hand', 'vor-wiederherstellen': 'vor dem Zurückholen' };

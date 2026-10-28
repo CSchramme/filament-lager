@@ -817,7 +817,46 @@ export function normalizeOrder(input, { shipping = false } = {}) {
     note: String(src.note ?? '').trim().slice(0, 1000), // Hinweis für den Kunden
     token: /^[A-Za-z0-9_-]{16,64}$/.test(str(src.token)) ? str(src.token) : '', // Link ohne Passwort
     printJob: job, // Druck, dessen Fortschritt der Kunde sieht
+    appointment: normalizeAppointment(src.appointment), // Termin für Abholung oder Lieferung
   };
+}
+
+// Termin: at als ISO-Zeit; setAt (wann eingetragen) und reminded (wann
+// erinnert) für die Erinnerung am Vortag
+export function normalizeAppointment(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const at = str(src.at);
+  if (!at || Number.isNaN(Date.parse(at))) return null;
+  return {
+    at: new Date(at).toISOString(), note: str(src.note).slice(0, 300), setAt: str(src.setAt), reminded: str(src.reminded),
+  };
+}
+
+// Was für ein Termin, je nach Lieferart
+export const appointmentLabel = (delivery) => ({ abholung: 'Abholung', lieferung: 'Lieferung', versand: 'Versand' }[delivery] || 'Termin');
+
+// Kommende Termine (ab heute früh), nach Zeit
+export function upcomingAppointments(sales, now = new Date()) {
+  const from = new Date(now);
+  from.setHours(0, 0, 0, 0);
+  return sales.filter((s) => s.order && s.order.appointment && s.order.status !== 'zugestellt' && Date.parse(s.order.appointment.at) >= from.getTime())
+    .sort((a, b) => a.order.appointment.at.localeCompare(b.order.appointment.at));
+}
+
+// Kalender-Datei (.ics) für einen Termin, mit Erinnerung eine Stunde vorher
+export function icsEvent({
+  uid, start, minutes = 30, title, location = '', description = '', now = new Date().toISOString(),
+}) {
+  const t = (iso) => new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const esc = (v) => String(v).replace(/\\/g, '\\\\').replace(/[,;]/g, (m) => `\\${m}`).replace(/\r?\n/g, '\\n');
+  const end = new Date(Date.parse(start) + minutes * 60000).toISOString();
+  return [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Filament-Lager//DE', 'CALSCALE:GREGORIAN', 'BEGIN:VEVENT',
+    `UID:${uid}@filament-lager`, `DTSTAMP:${t(now)}`, `DTSTART:${t(start)}`, `DTEND:${t(end)}`,
+    `SUMMARY:${esc(title)}`, location ? `LOCATION:${esc(location)}` : '', description ? `DESCRIPTION:${esc(description)}` : '',
+    'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${esc(title)}`, 'TRIGGER:-PT1H', 'END:VALARM',
+    'END:VEVENT', 'END:VCALENDAR',
+  ].filter(Boolean).join('\r\n') + '\r\n';
 }
 
 // Zeitpunkt, an dem ein Schritt erreicht wurde (der letzte Eintrag zählt)

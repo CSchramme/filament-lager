@@ -191,7 +191,7 @@ test('Benachrichtigung: Fehler und Prüfung der Einstellungen', async () => {
   assert.throws(() => validateNotify({ server: 'https://ntfy.sh', topic: 'a b' }), /Thema/);
   assert.doesNotThrow(() => validateNotify({ server: 'https://ntfy.example.de', topic: 'mein_thema-1' }));
   assert.deepEqual(normalizeNotify({ server: 'https://ntfy.sh///', events: { low: false } }).events, {
-    done: true, failed: true, paused: true, low: false, delivered: true, umsatz: true,
+    done: true, failed: true, paused: true, low: false, delivered: true, umsatz: true, termin: true,
   });
 });
 
@@ -615,4 +615,45 @@ test('Katalog: Preis fest oder berechnet, Verkaufszahlen, Reste-Vorschläge', as
   });
   assert.equal(ideas.length, 1); // die volle Rolle nicht
   assert.deepEqual(ideas[0].ideas.map((i) => [i.title, i.count, i.left]), [['Clip', 4, 1], ['Kürbis', 10, 5]]);
+});
+
+test('Termine: kommende Termine, Erinnerung am Vortag, Kalender-Datei', async () => {
+  const {
+    icsEvent, normalizeOrder, upcomingAppointments,
+  } = await import('../public/js/domain.js');
+  const { checkAppointments } = await import('../src/termine.js');
+  const mk = (nr, at, extra = {}) => normalizeSale({
+    nr, date: '2026-10-28', customer: 'Lisa Müller\nGartenweg 5', items: [{ title: 'Kürbis', qty: 2, price: 3 }],
+    order: { status: 'fertig', delivery: 'abholung', appointment: { at, setAt: '2026-10-27T08:00:00Z' }, ...extra },
+  });
+  const sales = [
+    mk('2026-002', '2026-10-30T15:00:00Z'),
+    mk('2026-001', '2026-10-29T16:00:00Z'),
+    mk('2026-003', '2026-10-20T10:00:00Z'), // vorbei
+    mk('2026-004', '2026-10-29T17:00:00Z', { status: 'zugestellt' }),
+  ];
+  assert.deepEqual(upcomingAppointments(sales, new Date('2026-10-28T12:00:00Z')).map((s) => s.nr), ['2026-001', '2026-002']);
+  const sent = [];
+  const notifier = { notify: (ev, msg) => sent.push([ev, msg]) };
+  const store = { data: { sales } };
+  // 28.10. 18:00: Termin am 29.10. 16:00 ist weniger als 24 h entfernt
+  assert.equal(checkAppointments({ store, notifier, now: new Date('2026-10-28T18:00:00Z') }), true);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0][0], 'termin');
+  assert.equal(sent[0][1].title, 'Abholung: Lisa Müller');
+  assert.match(sent[0][1].message, /Donnerstag, 29\. Oktober um 17:00 Uhr|Donnerstag, 29\. Oktober, 17:00 Uhr|29\. Oktober/);
+  assert.equal(checkAppointments({ store, notifier, now: new Date('2026-10-28T19:00:00Z') }), false); // nur einmal
+  // gerade eingetragen: nicht sofort melden
+  sales[1].order.appointment = { ...sales[1].order.appointment, setAt: '2026-10-29T15:30:00Z', reminded: '' };
+  sales[1].order.appointment.at = '2026-10-30T15:00:00.000Z';
+  sales[1].order.appointment.reminded = '';
+  checkAppointments({ store, notifier, now: new Date('2026-10-29T16:00:00Z') });
+  assert.equal(sent.length, 2); // 2026-002 (eingetragen am 27.10.)
+  assert.equal(normalizeOrder({ appointment: { at: 'morgen' } }).appointment, null);
+  const ics = icsEvent({
+    uid: 'x', start: '2026-10-29T16:00:00Z', title: 'Abholung: Lisa, Müller', location: 'A\nB', now: '2026-10-28T10:00:00Z',
+  });
+  assert.match(ics, /DTSTART:20261029T160000Z\r\nDTEND:20261029T163000Z\r\n/);
+  assert.match(ics, /SUMMARY:Abholung: Lisa\\, Müller\r\n/);
+  assert.match(ics, /LOCATION:A\\nB\r\n/);
 });

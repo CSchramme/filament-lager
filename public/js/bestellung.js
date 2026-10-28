@@ -2,9 +2,11 @@
 // Versandhändler (eingegangen, in Bearbeitung, wird gedruckt, verpackt,
 // versendet, zugestellt), mit Druckfortschritt und DHL-Sendung. Der Zugang
 // steht im Link (bestellung.html#t=…) und geht als Header an den Server.
-import { orderLabel, orderSteps, orderText } from './domain.js';
 import {
-  esc, fmtDuration, fmtEur,
+  appointmentLabel, icsEvent, orderLabel, orderSteps, orderText,
+} from './domain.js';
+import {
+  download, esc, fmtDuration, fmtEur,
 } from './ui.js';
 
 const view = document.getElementById('view');
@@ -82,20 +84,32 @@ function trackingHtml(t) {
     </section>`;
 }
 
+let last = null; // zuletzt geladene Bestellung (für die Kalender-Datei)
+
 function render(d) {
+  last = d;
   const o = d.order;
   const seller = d.seller || '3D-Druck';
   document.title = `Bestellung ${d.nr} · ${seller}`;
   document.getElementById('brand').textContent = seller;
   // Voraussichtliches Datum, solange es noch etwas zu warten gibt
   const waiting = o.status !== 'zugestellt' && !(o.delivery === 'abholung' && o.status === 'fertig');
-  const expect = o.expectedAt && waiting
+  const expect = o.expectedAt && waiting && !o.appointment
     ? `<p class="order-expect">${o.delivery === 'abholung' ? 'Voraussichtlich abholbereit' : 'Voraussichtlich da'}: <strong>${esc(dayLong(o.expectedAt))}</strong></p>` : '';
+  // Fester Termin für Abholung oder Lieferung, mit Kalender-Datei
+  const appt = o.appointment ? `<div class="order-appt">
+      <span>${esc(appointmentLabel(o.delivery))} am <strong>${esc(new Date(o.appointment.at).toLocaleString('de-DE', {
+    weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
+  }))} Uhr</strong>${o.appointment.note ? `<br><span class="small muted">${esc(o.appointment.note)}</span>` : ''}
+      ${o.delivery === 'abholung' && d.contact ? `<br><span class="small">Abholung bei ${esc(seller)}, ${esc(d.contact.replace(/\n+/g, ', '))}</span>` : ''}</span>
+      <button type="button" class="btn small" data-ics>In den Kalender</button>
+    </div>` : '';
   view.innerHTML = `<section class="panel order-hero">
       <p class="small muted">Bestellung ${esc(d.nr)} vom ${esc(new Date(d.date + 'T12:00:00').toLocaleDateString('de-DE'))}${d.customer ? ` · für ${esc(d.customer)}` : ''}</p>
       <h1>${esc(orderLabel(o.status, o.delivery))}</h1>
       <p>${esc(orderText(o.status, o.delivery))}</p>
       ${expect}
+      ${appt}
       ${liveHtml(d.live)}
       ${stepsHtml(o)}
     </section>
@@ -111,6 +125,19 @@ function render(d) {
     </section>
     <p class="small muted order-foot">${d.contact ? `Fragen? ${esc(seller)}, ${esc(d.contact.replace(/\n+/g, ', '))}. ` : ''}Diese Seite aktualisiert sich von selbst.</p>`;
 }
+
+// Termin in den eigenen Kalender
+view.addEventListener('click', (e) => {
+  if (!e.target.closest('[data-ics]') || !last) return;
+  const o = last.order;
+  download(`termin-${last.nr}.ics`, icsEvent({
+    uid: `bestellung-${last.nr}`,
+    start: o.appointment.at,
+    title: `${appointmentLabel(o.delivery)}: Bestellung ${last.nr}${last.seller ? ` bei ${last.seller}` : ''}`,
+    location: o.delivery === 'abholung' && last.contact ? last.contact.replace(/\n+/g, ', ') : '',
+    description: last.items.map((i) => `${i.qty} × ${i.title}`).join(', '),
+  }), 'text/calendar;charset=utf-8');
+});
 
 window.addEventListener('hashchange', () => location.reload());
 load();

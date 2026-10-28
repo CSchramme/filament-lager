@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import { stockLevel } from '../public/js/domain.js';
 import { taxStatus } from '../public/js/stats.js';
 
-export const EVENTS = ['done', 'failed', 'paused', 'low', 'delivered', 'umsatz'];
+export const EVENTS = ['done', 'failed', 'paused', 'low', 'delivered', 'umsatz', 'termin'];
 
 export function newTopic() {
   return 'filament-lager-' + crypto.randomBytes(8).toString('hex');

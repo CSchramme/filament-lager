@@ -4,7 +4,7 @@
 import {
   advanceOrder, applyPriceChanges, applyStockSale, archiveSpool, assignNumbers, mergeStock, migratePriceList, newId, nextOfferNr, nextReceiptNr, normalizeCustomer,
   normalizeArchivedSpool, normalizeExpense, normalizeGift, normalizeOffer, normalizeProduct, normalizePowerPayment, normalizeSale, normalizeSettings, normalizeSpool, normalizeStockItem, placeList,
-  normalizeDelivery, normalizeOrder, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary, setOrderStatus, spoolsFromDelivery,
+  normalizeAppointment, normalizeDelivery, normalizeOrder, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary, setOrderStatus, spoolsFromDelivery,
 } from './domain.js';
 import { seedSpools } from './seed.js';
 
@@ -305,6 +305,10 @@ class LocalBackend {
     if (b.delivery !== undefined) o.delivery = b.delivery;
     if (b.expectedAt !== undefined) o.expectedAt = b.expectedAt;
     if (b.note !== undefined) o.note = b.note;
+    if (b.appointment !== undefined) {
+      const a = normalizeAppointment(b.appointment);
+      o.appointment = a && o.appointment && o.appointment.at === a.at ? { ...a, setAt: o.appointment.setAt, reminded: o.appointment.reminded } : a && { ...a, setAt: new Date().toISOString(), reminded: '' };
+    }
     if (b.link === 'weg') o.token = '';
     sale.order = normalizeOrder(o);
     this.write(data);

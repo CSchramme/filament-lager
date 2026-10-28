@@ -2,7 +2,7 @@
 // Kundenliste. Positionen kommen aus dem Rechner, dem Druckverlauf (Reiter
 // "Drucke") oder dem Vorrat.
 import {
-  DELIVERY_MODES, GIFT_REASONS, customerText, deliveryQuote, giftFollowUp, giftSummary, offerStatus, sameCustomer, stockSaleItem, orderLabel, orderStepAt, orderSteps, salesSummary, trackingLabel, trackingUrl, validTrackingNumber,
+  DELIVERY_MODES, GIFT_REASONS, appointmentLabel, customerText, icsEvent, upcomingAppointments, deliveryQuote, giftFollowUp, giftSummary, offerStatus, sameCustomer, stockSaleItem, orderLabel, orderStepAt, orderSteps, salesSummary, trackingLabel, trackingUrl, validTrackingNumber,
 } from './domain.js';
 import { openReceipt } from './documents.js';
 import { taxStatus } from './stats.js';
@@ -13,7 +13,7 @@ import {
 } from './sales.js';
 import { editStockDialog, sellDialog } from './stock.js';
 import {
-  combobox, dateDe, esc, fmtDuration, fmtEur, fmtNum, icons, localDay, openDialog, parseNum as num, patchText, plural, tile, toast,
+  combobox, dateDe, download, esc, fmtDuration, fmtEur, fmtNum, icons, localDay, openDialog, parseNum as num, patchText, plural, tile, toast,
 } from './ui.js';
 
 let ctx = null; // { root, app, go }
@@ -590,6 +590,7 @@ function updateSales() {
       ${tile('Gewinn gesamt', fmtEur(t.profit), `Kosten ${fmtEur(t.cost)}`)}
     </div>
     ${taxNote()}
+    ${appointmentsHtml()}
     ${openOrdersHtml()}
     ${sales.sales.length ? `<div class="sale-list">${sales.sales.slice(0, 50).map((s) => `
       <div class="sale-row receipt-row">
@@ -624,6 +625,47 @@ function statusPill(s) {
   return '';
 }
 
+// Termine: Datum für datetime-local, kurz für Listen, Kalender-Datei
+function localInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+const whenShort = (iso) => new Date(iso).toLocaleString('de-DE', {
+  weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+});
+
+function downloadIcs(sale) {
+  const o = sale.order;
+  const who = sale.customer ? sale.customer.split('\n')[0] : '';
+  const address = sale.customer.split('\n').slice(1).join(', ');
+  const text = icsEvent({
+    uid: sale.id,
+    start: o.appointment.at,
+    title: `${appointmentLabel(o.delivery)}${who ? `: ${who}` : ''} (Beleg ${sale.nr})`,
+    location: o.delivery === 'lieferung' ? address : '',
+    description: [sale.items.filter((i) => i.kind !== 'versand').map((i) => `${i.qty} × ${i.title}`).join(', '), o.appointment.note].filter(Boolean).join('\n'),
+  });
+  download(`termin-${sale.nr}.ics`, text, 'text/calendar;charset=utf-8');
+}
+
+// Nächste Termine (Abholung, Lieferung) über den offenen Bestellungen
+function appointmentsHtml() {
+  const list = upcomingAppointments(sales.sales).slice(0, 10);
+  if (!list.length) return '';
+  return `<h3>Termine</h3>
+    <div class="sale-list open-orders">${list.map((s) => `<div class="sale-row receipt-row">
+        <span class="num small muted sale-nr"><span>${esc(whenShort(s.order.appointment.at))}</span><span>${esc(appointmentLabel(s.order.delivery))}</span></span>
+        <div class="sale-main">
+          <button type="button" class="sale-title" data-sales="order" data-id="${esc(s.id)}"><strong>${esc(s.customer ? s.customer.split('\n')[0] : s.title)}</strong><span class="small muted"> · ${esc(s.nr)}, ${esc(s.title)}</span></button>
+          ${s.order.appointment.note ? `<span class="small muted">${esc(s.order.appointment.note)}</span>` : ''}
+        </div>
+        <span></span><span></span>
+        <button type="button" class="btn small" data-sales="ics" data-id="${esc(s.id)}">Kalender</button>
+        <span></span>
+      </div>`).join('')}</div>`;
+}
+
 // Bestellungen, die noch nicht beim Kunden sind, mit dem nächsten Schritt
 function openOrdersHtml() {
   const open = sales.sales.filter((s) => s.order.status && s.order.status !== 'zugestellt')
@@ -634,7 +676,7 @@ function openOrdersHtml() {
     const steps = orderSteps(s.order.delivery);
     const next = steps[steps.indexOf(s.order.status) + 1];
     return `<div class="sale-row receipt-row">
-        <span class="num small muted sale-nr"><span>${esc(s.nr)}</span><span>${s.order.expectedAt ? `bis ${dateDe(s.order.expectedAt)}` : dateDe(s.date)}</span></span>
+        <span class="num small muted sale-nr"><span>${esc(s.nr)}</span><span>${s.order.appointment ? esc(whenShort(s.order.appointment.at)) : s.order.expectedAt ? `bis ${dateDe(s.order.expectedAt)}` : dateDe(s.date)}</span></span>
         <div class="sale-main">
           <button type="button" class="sale-title" data-sales="order" data-id="${esc(s.id)}"><strong>${esc(s.customer ? s.customer.split('\n')[0] : s.title)}</strong><span class="small muted"> · ${esc(s.title)}</span></button>
           ${statusPill(s)}
@@ -655,6 +697,7 @@ function onSalesClick(e) {
   if (!sale) return;
   if (b.dataset.sales === 'open') openReceipt(sale, ctx.app.settings);
   if (b.dataset.sales === 'order') orderDialog(sale);
+  if (b.dataset.sales === 'ics') downloadIcs(sale);
   if (b.dataset.sales === 'next') {
     b.disabled = true;
     ctx.app.backend.updateOrder(sale.id, { status: b.dataset.step }).then((res) => {
@@ -724,6 +767,9 @@ function orderDialog(sale) {
           <label class="field"><span>Übergabe</span><select name="delivery">${Object.entries(DELIVERY_MODES).map(([k, l]) => `<option value="${k}" ${o.delivery === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
           <label class="field"><span>Voraussichtlich da bzw. abholbereit</span><input type="date" name="expectedAt" value="${esc(o.expectedAt)}"></label>
           <label class="field full"><span>Nachricht an den Kunden (optional)</span><textarea name="note" rows="2" placeholder="z. B. Der Druck braucht etwas länger, das Filament kommt am Montag.">${esc(o.note)}</textarea></label>
+          <label class="field"><span>Termin (${esc(appointmentLabel(o.delivery))}, optional)</span><input type="datetime-local" name="apptAt" value="${esc(localInput(o.appointment && o.appointment.at))}"><small class="muted">Erinnerung aufs Handy am Vortag</small></label>
+          <label class="field"><span>Notiz zum Termin</span><input name="apptNote" value="${esc(o.appointment ? o.appointment.note : '')}" placeholder="z. B. klingeln bei Müller"></label>
+          <div class="actions full"><button type="button" class="btn small" data-order="ics">In den Kalender</button></div>
         </div></div>
       <div class="dlg-section"><h3>Link für den Kunden</h3><div data-link>${linkHtml(sale)}</div></div>
       <div class="dlg-section"><h3>DHL-Sendung</h3>
@@ -760,7 +806,9 @@ function orderDialog(sale) {
   async function send(body) {
     const f = form.elements;
     const res = await ctx.app.backend.updateOrder(sale.id, {
-      delivery: f.delivery.value, expectedAt: f.expectedAt.value, note: f.note.value, ...body,
+      delivery: f.delivery.value, expectedAt: f.expectedAt.value, note: f.note.value,
+      appointment: { at: f.apptAt.value ? new Date(f.apptAt.value).toISOString() : '', note: f.apptNote.value.trim() },
+      ...body,
     });
     takeSales(res);
     updateSales();
@@ -801,6 +849,15 @@ function orderDialog(sale) {
         });
       }
       if (act === 'share') await navigator.share({ title: `Bestellung ${s.nr}`, text: message(s), url: orderLink(s.order) }).catch(() => {});
+      if (act === 'ics') {
+        const at = form.elements.apptAt.value;
+        if (!at) {
+          toast('Erst einen Termin eintragen.', 'error');
+          return;
+        }
+        const fresh = await send({});
+        downloadIcs(fresh);
+      }
       if (act === 'check') {
         b.disabled = true;
         const res = await ctx.app.backend.checkTracking(sale.id);

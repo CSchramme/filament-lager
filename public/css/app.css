@@ -967,3 +967,4 @@ pre.code { margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); bo
 .rest-spool { display: flex; align-items: center; gap: 6px; }
 .rest-spool .num { margin-left: auto; }
 .rest-item ul { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 3px; }
+.order-appt { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; padding: 12px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--accent-soft); }

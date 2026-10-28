@@ -398,7 +398,7 @@ test('Benachrichtigungen einrichten, testen und knappe Rollen melden', async () 
   assert.equal(on.status, 200);
   assert.deepEqual([on.body.enabled, on.body.hasToken, on.body.token], [true, true, undefined]);
   assert.deepEqual(on.body.events, {
-    done: true, failed: true, paused: false, low: true, delivered: true, umsatz: true,
+    done: true, failed: true, paused: false, low: true, delivered: true, umsatz: true, termin: true,
   });
   ntfy.length = 0;
   const t = await call('POST', '/api/benachrichtigungen/test', {});
@@ -908,4 +908,21 @@ test('Katalog: Teile anlegen, ändern, löschen', async () => {
   assert.deepEqual([upd.body.item.price, upd.body.item.photo.startsWith('data:image/png')], [2, true]);
   assert.equal((await call('GET', '/api/katalog')).body.products.length, 1);
   assert.equal((await call('DELETE', `/api/katalog/${made.body.item.id}`)).body.products.length, 0);
+});
+
+test('Termin am Beleg: speichern, auf der Kundenseite, neue Zeit erinnert neu', async () => {
+  const created = await call('POST', '/api/verkaeufe', { date: '2026-10-28', customer: 'Tom', items: [{ title: 'Clip', qty: 1, price: 2 }] });
+  const id = created.body.sale.id;
+  const r1 = await call('PUT', `/api/verkaeufe/${id}/bestellung`, { link: 'neu', delivery: 'abholung', appointment: { at: '2026-11-02T15:00:00.000Z', note: 'klingeln' } });
+  const a = r1.body.sale.order.appointment;
+  assert.deepEqual([a.at, a.note, a.reminded], ['2026-11-02T15:00:00.000Z', 'klingeln', '']);
+  assert.ok(a.setAt);
+  const pub = await (await fetch(base + '/api/bestellung', { headers: { 'X-Zugang': r1.body.sale.order.token } })).json();
+  assert.deepEqual(pub.order.appointment, { at: '2026-11-02T15:00:00.000Z', note: 'klingeln' });
+  // gleiche Zeit behält setAt, leer entfernt den Termin
+  const r2 = await call('PUT', `/api/verkaeufe/${id}/bestellung`, { appointment: { at: '2026-11-02T15:00:00.000Z', note: 'klingeln' } });
+  assert.equal(r2.body.sale.order.appointment.setAt, a.setAt);
+  const r3 = await call('PUT', `/api/verkaeufe/${id}/bestellung`, { appointment: { at: '' } });
+  assert.equal(r3.body.sale.order.appointment, null);
+  await call('DELETE', `/api/verkaeufe/${id}`);
 });

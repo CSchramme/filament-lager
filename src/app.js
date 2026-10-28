@@ -6,7 +6,7 @@ import express from 'express';
 import {
   applyPriceChanges, applyStockSale, archiveSpool, colorNameFor, normalizeProduct, openPower, mergeStock, newId, normalizeCustomer, normalizeExpense, nextOfferNr, nextReceiptNr, normalizeOffer, normalizePowerPayment, normalizeSale,
   normalizeSettings, normalizeSpool, normalizeStockItem, normalizeTracking, planMove, planPlaces, priceListChanges, saleFromOffer, salesSummary,
-  validTrackingNumber, ORDER_STEPS, advanceOrder, colorChart, newToken, normalizeDelivery, normalizeGift, normalizeOrder, setOrderStatus, spoolsFromDelivery, trackingUrl,
+  validTrackingNumber, ORDER_STEPS, advanceOrder, colorChart, newToken, normalizeAppointment, normalizeDelivery, normalizeGift, normalizeOrder, setOrderStatus, spoolsFromDelivery, trackingUrl,
 } from '../public/js/domain.js';
 import { seedSpools } from '../public/js/seed.js';
 import {
@@ -26,6 +26,7 @@ import {
 import { Tracker } from './dhl.js';
 import { Backups, withoutSecrets } from './backup.js';
 import { Router } from './route.js';
+import { checkAppointments } from './termine.js';
 
 // Versionskennung der Oberfläche aus Name, Größe und Änderungszeit der Module
 // und Stylesheets. index.html lädt damit "app.js?v=…", sodass der Browser nach
@@ -186,6 +187,7 @@ export function createApp({
       price: sale.price,
       order: {
         status: o.status, delivery: o.delivery, history: o.history, expectedAt: o.expectedAt, note: o.note,
+        appointment: o.appointment && o.status !== 'zugestellt' ? { at: o.appointment.at, note: o.appointment.note } : null,
       },
       live,
       tracking: t ? {
@@ -723,7 +725,13 @@ export function createApp({
   app.get('/api/verkaeufe', (req, res) => {
     res.json(salesView());
     tracker.checkDue(); // Plesk hält die App im Leerlauf an, deshalb auch beim Öffnen
+    remindAppointments();
   });
+
+  // Erinnerung an Termine (server.js prüft alle 15 Minuten)
+  function remindAppointments(now = new Date()) {
+    if (checkAppointments({ store, notifier, now })) store.save().catch((err) => console.error('Speichern fehlgeschlagen:', err.message));
+  }
 
   // Teile aus dem Vorrat abbuchen; reicht der Vorrat nicht, wird nichts gespeichert.
   function takeFromStock(sale) {
@@ -770,6 +778,14 @@ export function createApp({
     res.json({ sale: fresh, ...salesView() });
   });
 
+  // Termin setzen: neue Zeit -> Erinnerung wieder offen
+  function appointmentFrom(input, old) {
+    const a = normalizeAppointment(input);
+    if (!a) return null;
+    if (old && old.at === a.at) return { ...a, setAt: old.setAt, reminded: old.reminded };
+    return { ...a, setAt: new Date().toISOString(), reminded: '' };
+  }
+
   // Druck, der gerade läuft (für den Fortschritt auf der Kundenseite)
   function runningJob() {
     if (!printers || typeof printers.status !== 'function') return null;
@@ -798,6 +814,7 @@ export function createApp({
     if (b.delivery !== undefined) o.delivery = b.delivery;
     if (b.expectedAt !== undefined) o.expectedAt = b.expectedAt;
     if (b.note !== undefined) o.note = b.note;
+    if (b.appointment !== undefined) o.appointment = appointmentFrom(b.appointment, o.appointment);
     if (b.link === 'neu') {
       o.token = newToken();
       if (!o.status) setOrderStatus(o, 'bestellt', sale.createdAt);
@@ -1247,6 +1264,7 @@ export function createApp({
   // Für den Start und den Zeitgeber in server.js.
   app.locals.autoSync = autoSync;
   app.locals.tracker = tracker;
+  app.locals.remindAppointments = remindAppointments;
   app.locals.backups = backups;
   app.locals.startBambu = async () => {
     syncPrinters();
